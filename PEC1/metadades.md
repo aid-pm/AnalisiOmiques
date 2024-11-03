@@ -15,6 +15,7 @@ quimioradioteràpia i la cirurgia. Els espectres de 1HRMN es van adquirir al Can
 mitjançant Chenomx NMR Suite v7.6.
 
 ## 3. Contingut de les dades
-Tenim un arxiu principal amb l'expressió de 140 metabolits per mostra, on està el tipus de mostra (control de qualitat o mostra normal) i la classe 
-de pacient (control de qualitat, GC, BN i HE). Després tenim un arxiu peak amb informació de cada metabolit, amb el nom científic d'aquest, així com 
-el percentatge de missings i la mesura de la desviació estàndard relativa de qualitat en percentatge.
+Tenim un arxiu principal amb l'expressió de 140 metabolits per mostra, on està un identificador de mostra (Sample ID), el tipus de mostra 
+(SampleType: control de qualitat o mostra normal) i la classe de pacient (Class: control de qualitat, GC, BN i HE). Després tenim un arxiu peak 
+amb informació de cada metabolit, un index de metabolits (Idx), el nom MX utilitzat (Name), el nom científic d'aquest (Label), així com 
+el percentatge de missings (Perc_missing) i la mesura de la desviació estàndard relativa de qualitat en percentatge (QC_RSD).
