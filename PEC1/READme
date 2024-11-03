@@ -1,6 +1,6 @@
 En aquest repositori de github trobareu:
-- l' informe,
-- l'objecte contenidor amb les dades i les metadades en format binari de R (arxiu amb extensió . Rda),
-- el codi R per a l' exploració de les dades
-- dades en format text i
-- les metadades sobre el dataset en un arxiu markdown.
+- l'informe (Perramon-Malavez-Aida-PEC1.pdf)
+- l'objecte contenidor amb les dades i les metadades en format binari de R (arxiu amb extensió . Rda) (objecte_dades_meta.Rda)
+- el codi R per a l' exploració de les dades (Perramon-Malavez-Aida-PEC1.Rmd)
+- dades en format text (dades_originals.txt i peak_original.txt)
+- les metadades sobre el dataset en un arxiu markdown (metadades.Rmd)
