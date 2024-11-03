@@ -1,0 +1,898 @@
+---
+title: "Informe de la PEC1 d'Anàlisi de dades òmiques"
+author: "Aida Perramon Malavez"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    latex_engine: xelatex
+---
+
+\newpage
+# Abstract
+
+En aquesta PAC, hem analitzat les dades metabolòmiques de pacients amb càncer 
+gàstric (GC), malaltia gàstrica benigna (BN) i sans (HE), tenint les mostres de 
+control de qualitat (QC), per identificar metabòlits diferencials associats al 
+càncer gàstric, principalment. Creant un contenidor de dades tipus 
+`SummarizedExperiment`, hem preprocessat els registres filtrant-los per garantir 
+que els metabòlits complissin els estàndards de qualitat (variabilitat <20% i 
+menys del 10% dels valors faltants). Per la resta de dades, hem imputat els 
+valors faltants amb el mètode kNN i normalitzat les dades mitjançant una 
+transformació d'estabilització de la variància (VSN) per minimitzar els efectes 
+no biològics. Posteriorment hem realitzat un estudi descriptiu i multivariant, 
+amb un anàlisi de components principals (PCA) per comprovar la qualitat de les 
+mostres i un de correlació per revelar associacions entre metabòlits. A més, en 
+aquest estudi hem intentat identificar els metabòlits més diferencials entre 
+grups amb un test Mann Whitney-U, centrant-nos en els associats al teixit tumoral 
+(GC) en comparació amb el teixit sa (HE), i hem dissenyat un model estadístic de 
+Bayes per a comprendre la diferència en l'expressió metabòlica entre pacients 
+GC i HE per una banda i BN i HE per una altra. Hem trobat que la sobreexpressió 
+dels metabolits u233 i N-AcetylglutamineDerivative són indicadors de patologia 
+gàstrica, conjuntament amb la infraexpressió de Creatinine. Tanmateix, és la 
+sobreexpressió de u144 i infraexpressió de 2-Hydroxyisobutyrate que diferencien 
+el GC de BN. Altres marcadors que ens podrien indicar GC en comptes de BN serien 
+l'expressió de 2-Furoylglycine i ATP i la infraexpressió de 1-Methylnicotinamide. 
+
+# Objectius de l'Estudi
+
+L'objectiu d'aquesta PEC és planificar i executar una versió simplificada del 
+procés d'anàlisi de dades òmiques, practicant les metodologies treballades a 
+classe. 
+
+Els objectius específics són:
+
+- Aprendre a treballar amb repositoris github (clonar-los i obtenir-ne dades).
+- Crear contenidors de dades i metadades òmiques, en particular en format 
+_SummarizedExperiment_. 
+- Explorar bases de dades òmiques, per a poder saber-ne l'estructura, realitzar 
+un control de qualitat bàsic que ens permeti saber la necessitat de pre-processat 
+previ a ànalisi que requereixen les dades i fer-ne una breu descripció estadística 
+multivariant.
+- Presentar de forma clara i organitzada la informació recollida.
+
+Pel que fa a l'objectiu de l'estudi amb les dades triades, és determinar si el 
+càncer gàstric (GC) té un perfil metabolòmic urinari únic en comparació amb els 
+pacients amb malaltia gàstrica benigna (BN) i sans (HE).
+
+\newpage
+
+# Materials i Mètodes
+
+## Requeriments computacionals per a l'anàlisi
+
+Hem treballat amb RStudio, amb la versió d'R 4.3.2. Han estat necessàries les 
+següents llibreries per a l'anàlisi i col·lecció de dades:
+
+```
+The BiocManager package from Bioconductor and:
+- SummarizedExperiment
+- pcaMethods
+- pmp
+- scater
+- vsn
+- limma
+- qmtools
+- ComplexHeatmap
+
+Other R packages:
+- readxl
+- dplyr
+- kableExtra
+- tidyr
+- ggplot2
+- reshape2
+- gridExtra
+- reshape2
+- circlize
+```
+```{r setup, include = FALSE, echo = F}
+options(warn = -1)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r requirements, echo = F, eval = T, warning = FALSE}
+packages <- c("readxl", "dplyr", "ggplot2", "gridExtra", "reshape2", "kableExtra",
+              "tidyr", "circlize", "BiocManager", "SummarizedExperiment", 
+              "pcaMethods", "pmp", "scater", "vsn", "limma", "qmtools", 
+              "ComplexHeatmap")
+
+for (pkg in packages) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+        if (pkg %in% c("SummarizedExperiment", "pcaMethods", "pmp", "scater", 
+                       "vsn", "limma", "qmtools", "ComplexHeatmap")) {
+            BiocManager::install(pkg)
+        } else {
+            install.packages(pkg)
+        }
+    }
+}
+
+invisible(lapply(packages, function(pkg) {
+    if (pkg %in% c("SummarizedExperiment", "pcaMethods", "pmp", "scater", 
+                   "vsn", "limma", "qmtools", "ComplexHeatmap")) {
+        suppressWarnings(suppressPackageStartupMessages(library(pkg, 
+                                                                character.only = TRUE)))
+    } else {
+        suppressWarnings(suppressPackageStartupMessages(library(pkg, 
+                                                                character.only = TRUE)))
+    }
+}))
+
+```
+
+## Obtenció de les dades
+
+Hem accedit al `github` de dades que se'ns proporciona a l'enunciat de la PEC. Això 
+ho fem de manera automatitzada accedint al link de descàrrega `.zip` del 
+repositori i fent l'extracció d'aquest en R. D'entre els datasets possibles, 
+hem triat les dades de càncer gàstric (GC) del tutorial del Centre per la Metabolòmica 
+Integrativa i Biologia Computacional (CICMB). 
+
+```{r dades, echo = T, eval = T}
+# Descarreguem el contingut del github
+download.file(url = 
+"https://github.com/nutrimetabolomics/metaboData/archive/refs/heads/main.zip"
+                                           , destfile = "pec1_metabodata.zip")
+
+# Extraiem el contingut de l'arxiu .zip
+unzip(zipfile = "pec1_metabodata.zip")
+
+# Busquem el directori correcte 
+carpeta_descomprimida <- list.dirs(path = ".", recursive = FALSE, 
+                   full.names = TRUE)[grepl("metaboData", list.dirs(path = ".", 
+                                                            recursive = FALSE))]
+
+directori <- list.files(path = carpeta_descomprimida, 
+                         recursive = TRUE, full.names = TRUE)
+
+# Escollim i carreguem l'arxiu de dades
+directori_dades <- directori[grepl("GastricCancer_NMR\\.xlsx$", directori)]
+if (length(directori_dades) > 0) {
+  data <- read_excel(directori_dades[1], sheet = "Data")
+  peak <- read_excel(directori_dades[1], sheet = "Peak")
+}
+```
+
+Aquestes dades van ser publicades originalment a l'article de Chan _et al._ (2016) [1]
+al _British Journal of Cancer_. L'objectiu del seu estudi era identificar si el 
+càncer gàstric té un perfil urinari metabolòmic únic comparat amb la malaltia 
+gàstrica benigna (BN) i pacients sans (HE). Les dades que se'ns presenten són doncs 
+dades urinàries de 43 GC, 40 BN i 40 HE aparellats, que es van analitzar amb 
+resonànica magnètica nuclear \( ^1\text{H} \) (\( ^1\text{H} \)-RMN).Els espectres 
+de \( ^1\text{H} \)-RMN es van obtenir al National High Field Nuclear Magnetic 
+Resonance Centre de Canadà (NANUC) amb un espectròmetre Varian Inova de 600 MHz. 
+L’anotació de metabòlits i la deconvolució espectral es van realitzar amb el 
+programari Chenomx NMR Suite v7.6.
+
+Les dades deconvolucionades i anotades estan disponibles al repositori 
+_Metabolomics Workbench_ amb l’identificador de projecte `PR000699` i es poden 
+accedir per mitjà del DOI: [10.21228/M8B10B].  Cal destacar que les dades brutes 
+originals de RMN no estan disponibles.
+
+## Estructura i descripció de les dades
+
+Les dades obtingudes presenten un format `tibble` de 140x153, és a dir, contenen 
+140 mostres i 153 _features_, entre les quals trobem 149 metabolits, dues 
+variables identificador, una variable de tipus de mostra (control de qualitat (QC) 
+o mostra (Sample)) i una última variable de classe (QC, GC, BN o HE). Les mostres 
+de control de qualitat agrupades, conegudes com a _pooled QC samples_, serveixen 
+per a assegurar la qualitat en l'anàlisi de les dades metabolòmiques. Aquestes 
+mostres es creen combinant una petita quantitat de cadascuna de les mostres d'un 
+experiment per formar una mescla representativa. La seva importància recau en el 
+fet que proporcionen un punt de referència per controlar la consistència i la 
+fiabilitat de les mesures al llarg de tot el procés analític, és a dir, que ens 
+permeten verificar que l'instrument ha mantingut una resposta estable durant tot 
+l'anàlisi [2]. 
+
+```{r hd, echo = F, eval = T}
+head(data)
+```
+
+A part d'aquestes dades se'ns proporciona la mesura de qualitat per cada metabolit 
+representant la variació en mesura que aquest metabolit ha generat en totes les 
+mostres (QC_RSD), així com el percentatge de valors faltants _missings_ per 
+cada metabolit i el seu nom científic o un identificador. 
+
+```{r hp, echo = F, eval = T}
+head(peak)
+```
+
+## Creació del contenidor de dades
+
+A continuació, hem creat un contenidor del tipus `SummarizedExperiment` que 
+contingui les dades i les metadades (informació sobre el dataset, les files i 
+les columnes). És a dir, hem reorganitzat la informació aportada pels dos excels 
+en un sol objecte. I és que la classe `SummarizedExperiment` emmagatzema dades 
+experimentals i les seves metadades, oferint una sincronització entre les dades 
+i les metadades, cosa que facilita el treball amb subgrups i redueix errors. A 
+diferència d' `ExpressionSet`, aquesta classe és més flexible, admetent tant 
+dades basades en GRanges com en DataFrames. [3]
+
+Hem preparat les nostres dades de la següent manera, per incorporar-les al 
+`SummarizedExperiment` que anomenarem `se`. Hem seguit les indicacions i 
+informació de Sánchez, A. [4] i Morgan, M. [5], a part de la guia de Bioconductor [3]. 
+També, ens hem basat en la guia de Li, Y. _et al._ [6], que explica que les 
+dades de metabolòmica es presenten amb les mostres en columnes i les variables 
+en files, és a dir, la matriu que se'ns dóna transposada.
+
+```{r contenidor_dades, echo = T, eval = T}
+# Pas 1: Dades de "assays", és a dir, els valors experimentals d'expressió de 
+# cada metabolit, com a "counts"
+
+counts_expressio <- as.matrix(data %>% select(starts_with("M"))) 
+counts_expressio <- t(counts_expressio)
+colnames(counts_expressio) <- data$SampleID
+
+# Pas 2: Preparem la informació de cada mostra, que es correspon amb les files 
+# dels "counts" i serien les columnes del SummarizedExperiment. Han de 
+# coincidir les files amb les columnes de "counts"
+
+info_mostres <- DataFrame(
+  TipusMostra = data$SampleType,
+  Classe = data$Class,
+  row.names = data$SampleID 
+)
+
+# Pas 3: Tot i que la RowData sol ser la informació de regions d'interès, 
+# posarem les dades dels metabolits en aquest apartat ja que crec que encaixa 
+# més que no pas el de metadades
+
+dades_metabolits <- DataFrame(
+  Metabolit = peak$Name,
+  Label = peak$Label,
+  Perc_missing = peak$Perc_missing,
+  QC_RSD = peak$QC_RSD,
+  row.names = peak$Name 
+)
+
+# Pas 4: Creem l'objecte SummarizedExperiment amb els "counts", la informació de
+# les mostres i les dades dels metabolits
+
+se <- SummarizedExperiment(
+  assays = list(counts = counts_expressio),
+  colData = info_mostres,                 
+  rowData = dades_metabolits)
+```
+
+Un cop construït l'objecte, podem accedir als seus diferents continguts a partir 
+d'uns comands concrets, com `array(se)` per accedir a l'expressió de metabolits, 
+`colData(se)` per a accedir a la informació de les mostres, i `rowData(se)` per a 
+aaccedir a la informació dels metabolits. 
+
+## Neteja de dades i control de qualitat
+
+Com hem comentat, se'ns proporciona el percentatge de _missings_ presents per a 
+cada metabolit, així com a una mesura de qualitat. Hem representat aquestes 
+variables per metabolit en scatterplots, com es pot veure a l'apartat de resultats.
+Seguint les consideracions de Broadhurst, D. _et al._ [7] i en vista a l'observat,
+conservarem només els metabòlits que compleixin amb un QC_RSD inferior al 20% i 
+dels quals faltin menys del 10% dels valors.
+
+```{r filtratge, echo = T, eval = T}
+# Trobem quins metabolits compleixen amb les condicions de filtratge
+metabolits_nets <- (rowData(se)$QC_RSD < 20) & (rowData(se)$Perc_missing < 10)
+
+# Filtrem l'objecte agafant només aquests metabolits
+se_filtrat <- se[metabolits_nets, ]
+```
+
+Hi ha moltes maneres de fer aquest filtratge, infinites llibreries que treballen 
+amb objectes `SummarizedExperiment` amb funcions predefinides però no he aconseguit 
+treballar com volia amb elles. Un exemple n'és `pmp`.
+
+També, a Jankevics, A. i Weber, R.J.M. [8], filtraven les mostres tal que 
+es quedaven amb aquelles que tinguessin menys d'un 10% de _missings_. Hem seguit 
+aquesta mateixa estratègia, ara sí utilitzant la llibreria `pmp` de `Bioconductor`.
+Després d'aquest filtratge, hem representat els valors faltants per identificar 
+si depenen de la classe (GC, HE, BN, QC).
+
+```{r filtre_pmp, echo = T, eval = T}
+se_filtrat_2 <- filter_samples_by_mv(df=se_filtrat, max_perc_mv=0.1)
+```
+
+I, finalment, hem imputat la resta de valors faltants utilitzant el mètode dels 
+k-nearest neighbours (KNN) com explica Joo, J. [9].
+
+```{r filtre_fi, echo = T, eval = T}
+se_final <- imputeIntensity(se_filtrat_2, i = "counts", name = "knn_counts", 
+                            method = "knn")
+```
+
+Hem fet un gràfic comparatiu entre la distribució inicial dels valors dels 
+metabolits i la distribució post-imputació per a comprovar que no varien 
+substancialment i s'ha dut a terme de forma correcta.
+
+Per últim, hem normalitzat els valors d'expressió dels metabolits, ja que  
+aquest procediment és necessari per reduir la variabilitat tècnica i assegurar 
+la comparabilitat entre mostres, ja que les diferències en les escales de mesura 
+poden distorsionar els anàlisis. 
+
+```{r norm, echo = T, eval = T}
+se_norm <- normalizeIntensity(se_final, i = "knn_counts", name = "norm_counts", 
+                         method = "vsn")
+```
+
+I hem verificat la normalització amb un boxplot comparatiu.
+
+D'altra banda, per a comprovar que el control de qualitat estigués ben fet, hem 
+calculat i representat les 2 components principals dels valors experimentals 
+d'expressió genètica.
+
+```{r pca, echo = T, eval = T}
+pca <- reduceFeatures(se_norm, i = "norm_counts", method = "pca", ncomp = 2)
+```
+
+## Anàlisi descriptiu i multivariant
+
+Hem calculat els estadístics descriptius bàsics (mitjana, mediana, desviació 
+estàndard, màxim i mínim) per a cada metabòlit en el conjunt de mostres. A 
+continuació, hem representat aquests valors en boxplots diferenciant per tipus 
+de mostra (GC, HE i BN), excloent els controls de qualitat per evitar possibles 
+interferències en els resultats.
+
+Posteriorment, hem realitzat un anàlisi de correlació per examinar les associacions 
+entre els diferents metabòlits, amb l’objectiu de revelar patrons d’associació 
+entre ells. Els resultats d’aquesta anàlisi s'han visualitzat en un _heatmap_ 
+per facilitar-ne la interpretació, utilitzant la llibreria `ComplexHeatmap` de 
+`Bioconductor`, que també ens proporciona dendograma.
+
+Per cada metabòlit, hem aplicat la prova no paramètrica de Mann-Whitney U per 
+comparar parelles de grups, concretament GC _vs._ HE i BN _vs._ HE. Igual que en 
+l’article de referència [1], hem aplicat la correcció per comparacions múltiples 
+mitjançant el mètode de Benjamini i Hochberg [10]. Establim la significança al 
+95%.
+
+Finalment, per identificar les característiques metabòliques diferencials entre 
+les classes, hem utilitzat la funció `compareSamples` a través de la interfície 
+del paquet `limma`, que permet calcular estadístiques empíriques de Bayes. 
+D'aquesta manera hem ajustat tres models, per a indicar-nos els metabolits 
+característics de:
+
+- Càncer gàstric respecte pacient sa(na).
+- Malaltia gàstrica benigna respecte pacient sa(na).
+- Càncer gàstric respecte malaltia gàstrica benigna. 
+
+```{r fits, echo = T, eval = T}
+fit <- compareSamples(se_norm, i = "norm_counts", group = "Classe",
+                      class1 = "HE", class2 = "GC")
+
+fit2 <- compareSamples(se_norm, i = "norm_counts", group = "Classe",
+                      class1 = "HE", class2 = "BN")
+
+fit3 <- compareSamples(se_norm, i = "norm_counts", group = "Classe",
+                      class1 = "BN", class2 = "GC")
+```
+
+\newpage
+
+# Resultats
+
+## Neteja de dades i control de qualitat
+
+Hem representat el percentatge de valors faltants per metabolit i la desviació 
+estàndard relativa del control de qualitat a la **Figura 1**. 
+
+```{r figura_qc, fig.width=13, fig.height=4, echo=F, eval=T, fig.cap="Percentatge de valors faltants i QC-RSD per metabolit a les dades sense pre-processar.", fig.align='center'}
+plot1 <- ggplot(peak, aes(x = Name, y = Perc_missing)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "red") +
+  labs(title = "Percentatge de valors faltants per metabolit",
+       x = "Metabolit",
+       y = "Missings (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) + 
+  scale_x_discrete(labels = function(x) ifelse(seq_along(x) %% 5 == 0, x, "")) 
+
+plot2 <- ggplot(peak, aes(x = Name, y = QC_RSD)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 20, linetype = "dashed", color = "red") +
+  labs(title = "Desviació estàndard relativa de control de qualitat per metabolit",
+       x = "Metabolit",
+       y = "QC_RSD") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) + 
+  scale_x_discrete(labels = function(x) ifelse(seq_along(x) %% 5 == 0, x, "")) 
+
+grid.arrange(plot1, plot2, ncol = 2)
+```
+
+Veiem com la condició sobre QC_RSD és molt més restrictiva que sobre els valors 
+faltants, ja que els _missings_ estan concentrats sota el llindar del 10% però 
+per la desviació relativa del control de qualitat visualment triaríem el llindar 
+del 50% per extreure'n _outliers_. Tanmateix, amb la informació que tenim i degut a la 
+naturalesa de la hipòtesi d'investigació, podem ser més restrictius en la qualitat 
+de les dades.
+
+Amb el preprocessat de dades ens hem quedat amb 52 metabolits descrits a la 
+**Taula 1**, en comptes dels 149 d'inici. També hem disminuït el nombre de 
+mostres de 140 a 139. 
+
+```{r taula_met, echo = F, eval = T}
+taula_metabolits <- as.data.frame(rowData(se_filtrat)[, c("Metabolit", "Label")])
+
+kable(taula_metabolits, caption = "Metabòlits restants després del filtratge", 
+      row.names = FALSE) %>%
+      kable_styling(full_width = FALSE, position = "center") %>%
+      column_spec(1, bold = TRUE) %>%
+      row_spec(0, bold = TRUE, color = "white", background = "#0073B8")
+```
+
+Un cop filtrades les dades, hem fet l'anàlisi de components principals i 
+les hem representat a la **Figura 2**. 
+
+```{r figura_pca, fig.height= 3, fig.width= 4, fig.align = 'center', echo = F, eval = T, fig.cap = "Anàlisi de components principals de les dades filtrades per missings i QC RSD."}
+g <- factor(colData(se_final)$Classe)
+plotReduced(pca, group = g)
+```
+
+El fet que les mostres de control de qualitat estiguin tan separades respecte a 
+les altres, afegit a que estan agrupades de manera compacte, suggereix que les 
+dades són de bona qualitat i que les mesures són fiables, ja que no han tingut 
+variació temporal. Tanmateix, es pot observar que les classes BN, GC i HE estan 
+bastant solapades, sobretot BN i GC, el qual indica que no tenen perfils de metabolits molt 
+diferenciats (almenys en les dues primeres components principals). Per tant, tot 
+i que l'experiment estigui ben realitzat, no sembla que hi hagi una 
+diferenciació entre classes directa. 
+
+Com a pas final del pre-processat de dades, hem normalitzat l'expressió dels 
+metabolits per a que siguin comparables entre ells. En la **Figura 3** hem 
+representat l'evolució de la distribució dels valors d'expressió dels metabolits 
+per al set original de dades, el filtrat i el finalment normalitzat.
+
+```{r boxplots_preproc, fig.height = 4, fig.width = 14, fig.cap = "Distribució dels valors d'expressió dels metabolits per a el set de dades (esquerra) original, (centre) filtrat i (dreta) normalitzat.", echo = F, eval = T}
+dades_originals <- melt(assay(se_norm, "counts"))
+colnames(dades_originals) <- c("Metabolit", "Mostra", "Expressió")
+
+dades_filtrades <- melt(assay(se_norm, "knn_counts"))
+colnames(dades_filtrades) <- c("Metabolit", "Mostra", "Expressió")
+
+dades_normalitzades <- melt(assay(se_norm, "norm_counts")) 
+colnames(dades_normalitzades) <- c("Metabolit", "Mostra", "Expressió")  
+
+cadax <- seq(1, length(unique(dades_originals$Metabolit)), by = 5)
+
+p1 <- ggplot(dades_originals, aes(x = Metabolit, y = Expressió)) + 
+      geom_boxplot() + 
+      ggtitle("Dades originals") + 
+      labs(x = "Metabolits", y = "Expressió") +
+      scale_x_discrete(breaks = unique(dades_originals$Metabolit)[cadax]) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2 <- ggplot(dades_filtrades, aes(x = Metabolit, y = Expressió)) + 
+      geom_boxplot() + 
+      ggtitle("Dades filtrades") + 
+      labs(x = "Metabolits", y = "Expressió") +
+      scale_x_discrete(breaks = unique(dades_filtrades$Metabolit)[cadax]) + 
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p3 <- ggplot(dades_normalitzades, aes(x = Metabolit, y = Expressió)) + 
+      geom_boxplot() + 
+      ggtitle("Dades normalitzades") + 
+      labs(x = "Metabolits", y = "Expressió") +
+      scale_x_discrete(breaks = unique(dades_normalitzades$Metabolit)[cadax]) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+Entre les dades originals i les filtrades la diferència és inapreciable, mentre 
+que veiem com s'ha fet correctament la normalització i els valors d'expressió 
+dels metabolits són comparables entre sí. Previ a aquest pre-processat, l'expressió 
+de per exemple M48 era molt superior a la de la resta de metabolits i, per tant, 
+no permetia fer un anàlisi comparatiu rigurós. 
+
+## Anàlisi descriptiu i multivariant
+
+Un cop hem pre-processat les dades, representem l'expressió de cada metabolit 
+per classe de pacient, excloses les mostres de controls de qualitat (**Figura 4**).
+
+```{r boxplots_pacient, echo = F, eval = T, fig.height = 3, fig.width = 10, fig.align = "center", fig.cap = "Boxplot de l'expressió dels metabolits per a pacients amb (esquerra) malaltia gàstrica benigna, (centre) càncer gàstric i (dreta) pacients sans."}
+# Agafem només les classes que no són del grup control
+classes_finals <- (colData(se_norm)$Classe %in% c("GC", "HE", "BN"))
+se_classes <- se_norm[, classes_finals]
+
+# Dades en el format del boxplot
+boxplots_dades <- as.data.frame(t(assay(se_classes, i = "norm_counts")))
+boxplots_dades$Classe <- colData(se_classes)$Classe
+boxplot_llarg <- boxplots_dades %>%
+  pivot_longer(cols = -Classe, names_to = "Metabolit", values_to = "Expressio")
+boxplot_llarg <- boxplot_llarg %>%
+     mutate(Metabolit = factor(Metabolit, levels = rowData(se_classes)$Metabolit))
+
+cadax <- seq(1, length(unique(boxplot_llarg$Metabolit)), by = 3)
+
+ggplot(boxplot_llarg, aes(x = Metabolit, y = Expressio, fill = Classe)) +
+  geom_boxplot() +
+  facet_wrap(~ Classe, scales = "free", ncol = 3) + 
+  labs(title = "Distribució d'expressió dels metabolits per classe",
+       x = "Metabolit", y = "Expressió") +
+  theme_minimal() +
+  scale_x_discrete(breaks = unique(boxplot_llarg$Metabolit)[cadax]) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+D'aquesta figura veiem que sembla interessant que l'expressió de la majoria dels 
+metabolits en pacients amb patologia gàstrica sigui benigna o maligna està per 
+sota d'aquella dels pacients sans. 
+
+Podem calcular els valors estadístics bàsics per a l'expressió dels diversos 
+metabolits del set final. Trobem a la **Taula 2**, **Taula 3** i **Taula 4** 
+resumits els valors de mitjana, mediana, desviació estàndard (SD), màxim i mínim per 
+a cada metabolit, per a pacients sans, amb càncer gàstric i amb malaltia gàstrica 
+benigna, respectivament. 
+
+```{r summary_stat, echo = F, eval = T}
+# Càlcul de les estadístiques bàsiques per a cada classe
+estadistiques_gc <- boxplots_dades %>%
+  filter(Classe == "GC") %>%
+  summarise(across(starts_with("M"), list(
+    mitjana = ~ mean(.x, na.rm = TRUE),
+    mediana = ~ median(.x, na.rm = TRUE),
+    sd = ~ sd(.x, na.rm = TRUE),
+    max = ~ max(.x, na.rm = TRUE),
+    min = ~ min(.x, na.rm = TRUE)
+  ), .names = "{.col}_{.fn}"))
+
+estadistiques_he <- boxplots_dades %>%
+  filter(Classe == "HE") %>%
+  summarise(across(starts_with("M"), list(
+    mitjana = ~ mean(.x, na.rm = TRUE),
+    mediana = ~ median(.x, na.rm = TRUE),
+    sd = ~ sd(.x, na.rm = TRUE),
+    max = ~ max(.x, na.rm = TRUE),
+    min = ~ min(.x, na.rm = TRUE)
+  ), .names = "{.col}_{.fn}"))
+
+estadistiques_bn <- boxplots_dades %>%
+  filter(Classe == "BN") %>%
+  summarise(across(starts_with("M"), list(
+    mitjana = ~ mean(.x, na.rm = TRUE),
+    mediana = ~ median(.x, na.rm = TRUE),
+    sd = ~ sd(.x, na.rm = TRUE),
+    max = ~ max(.x, na.rm = TRUE),
+    min = ~ min(.x, na.rm = TRUE)
+  ), .names = "{.col}_{.fn}"))
+
+# Reshape the data for better comparison
+estadistiques_gc_long <- estadistiques_gc %>%
+  pivot_longer(cols = everything(), 
+               names_to = c("Metabolit", ".value"), 
+               names_sep = "_")
+
+estadistiques_he_long <- estadistiques_he %>%
+  pivot_longer(cols = everything(), 
+               names_to = c("Metabolit", ".value"), 
+               names_sep = "_")
+
+estadistiques_bn_long <- estadistiques_bn %>%
+  pivot_longer(cols = everything(), 
+               names_to = c("Metabolit", ".value"), 
+               names_sep = "_")
+
+# Crear la taula d'estadístiques amb kableExtra per GC
+kable(estadistiques_he_long, caption = "Estadístiques bàsiques dels Metabolits - HE", 
+      col.names = c("Metabolit", "Mitjana", "Mediana", "SD", "Max", "Min")) %>%
+kable_styling("striped", full_width = FALSE, position = "center") %>%
+row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+row_spec(1:nrow(estadistiques_he_long), color = "black")
+
+kable(estadistiques_gc_long, caption = "Estadístiques bàsiques dels Metabolits - GC", 
+      col.names = c("Metabolit", "Mitjana", "Mediana", "SD", "Max", "Min")) %>%
+kable_styling("striped", full_width = FALSE, position = "center") %>%
+row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+row_spec(1:nrow(estadistiques_gc_long), color = "black")
+
+kable(estadistiques_bn_long, caption = "Estadístiques bàsiques dels Metabolits - BN", 
+      col.names = c("Metabolit", "Mitjana", "Mediana", "SD", "Max", "Min")) %>%
+kable_styling("striped", full_width = FALSE, position = "center") %>%
+row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+row_spec(1:nrow(estadistiques_bn_long), color = "black")
+
+
+```
+Amb les taules descriptives podem confirmar quantitativament l'observat a la 
+**Figura 4**. Per seguir amb l'exemple anterior, el metabolit M48 té una 
+expressió mitjana de 13.25 per a HE, però de 12.79 i 12.96 per a GC i BN 
+respectivament. D'altra banda, també sembla haver-hi metabolits diferencials de 
+patologia gàstrica, com l'M118, que té valors mitjans d'expressió superiors per 
+a GC i BN que per a HE. 
+
+Per a complementar aquesta informació, hem representat la matriu de correlació 
+dels metabolits en la **Figura 5**. Una manca de correlació es visualitza de 
+color blanc, mentre que la correlació positiva s'indica de vermell i la negativa 
+de color blau. 
+
+```{r corr, echo = F, eval = T, fig.width = 6, fig.height = 6, fig.align = "center"}
+cor_matrix <- cor(t(assay(se_norm, "norm_counts")), use = "pairwise.complete.obs")
+
+# Heatmap amb dendrograma utilitzant ComplexHeatmap
+Heatmap(cor_matrix, 
+        name = "Correlació",
+        col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+        show_row_dend = TRUE,    
+        show_column_dend = TRUE, 
+        column_names_gp = gpar(fontsize = 6),  
+        row_names_gp = gpar(fontsize = 6),  
+        heatmap_legend_param = list(title_gp = gpar(fontsize = 8), labels_gp = gpar(fontsize = 6))
+)
+```
+
+Figure 5: Matriu de correlació i dendogrames entre metabolits, de blau (-1) a 
+vermell (1), passant per blanc (0).
+
+Podem observar que els metabolits s'han reendreçat en aquesta representació. 
+Això és perquè, quan s'utilitza `ComplexHeatmap`, aquest reendreça automàticament 
+les files i columnes per reflectir agrupaments basats en similitud. És a dir, 
+aplica un clustering jeràrquic per defecte, reorganitzant els metabòlits en 
+funció de les seves correlacions, de manera que aquells amb patrons de correlació 
+similars queden més propers al _heatmap_. És d'aquesta manera com ens és més 
+fàcil identificar que hi ha dos grups bastant separats d'expressió de metabolits. 
+Els metabolits M7, M142, M148, M115, M66, M137, M73, M119, M110, M89, M138, M118, 
+M120 i M104 tenen una forta correlació entre ells, i alhora una relació inversa 
+amb l'expressió dels metabolits M105, M8, M101, M71, M15, M14, M45, M106, M75, 
+M74, M122, M90, M36, M37, M31 i M11, que entre ells també estan fortament 
+correlacionats. Això es pot comprovar mirant els dendogrames, on destaquen dos 
+grups principals.
+
+Són particularment intenses les correlacions entre l'M37 i l'M31, és a 
+dir, entre Azelate i Adipate, tot i que aquesta relació no està descrita a la 
+literatura (o no l'he trobat). També veiem una correlació molt forta entre M7 i 
+M142, identificats com 2-Furoylglycine i u43, així com entre l'M89 i M138, el 
+N-AcetylglutamineDerivative i l'u233. Al ser l'M142 i l'M138 metabolits inespecífics 
+no he pogut trobar informació a la literatura sobre aquestes relacions. 
+Pel que fa a correlacions negatives, destacarien per exemple l'M115 amb l'M31, 
+sent l'M115 el metabolit Trigonelline, o de l'M110 amb l'M74 (serotonina amb 
+isoleucina). Per a aquesta darrera interacció, he trobat algun article interessant 
+on semblen descriure l'antagonisme de la serotonina amb la leucina, però relatant 
+de manera inespecífica aquesta relació amb la isoleucina [11][12]. 
+
+Comprovem quantitativament l'existència d'aquestes relacions mitjançant la prova 
+de Mann-Whitney U. Mostrem els metabolits que surten significativament 
+(p-val ajustat < 0.05) diferents per a GC _vs._ HE a la **Taula 5** i per a 
+BN _vs._ HE a la **Taula 6**.
+
+```{r pval, echo = F, eval = T}
+norm_counts <- assay(se_norm, "norm_counts")
+grups <- colData(se_norm)$Classe  
+
+# Fem la funció per aplicar el Mann-Whitney U test (Wilcox) de forma iterativa
+mann_whitney <- function(x, grup1, grup2) {
+  vals_g1 <- x[, grups == grup1]
+  vals_g2 <- x[, grups == grup2]
+  
+  test <- wilcox.test(as.numeric(vals_g1), as.numeric(vals_g2), exact = FALSE)
+  
+  return(data.frame(
+    statistic = test$statistic,
+    p_value = test$p.value
+  ))
+}
+
+# Guardarem les dades en df
+GC_HE <- data.frame(Metabolite = rownames(norm_counts), stringsAsFactors = FALSE)
+BN_HE <- data.frame(Metabolite = rownames(norm_counts), stringsAsFactors = FALSE)
+
+for (metabolite in rownames(norm_counts)) {
+  # GC vs HE
+  df_gc_he <- mann_whitney(norm_counts[metabolite, , drop = FALSE], "GC", "HE")
+  GC_HE[GC_HE$Metabolite == metabolite, c("statistic", "p_value")] <- c(df_gc_he$statistic, 
+                                                               df_gc_he$p_value)
+  
+  # BN vs HE
+  df_bn_he <- mann_whitney(norm_counts[metabolite, , drop = FALSE], "BN", "HE")
+  BN_HE[BN_HE$Metabolite == metabolite, c("statistic", "p_value")] <- c(df_bn_he$statistic, 
+                                                               df_bn_he$p_value)
+}
+
+# Ajustem els pvals pel mètode de Benjamini i Hochberg 
+GC_HE <- GC_HE %>%
+  mutate(adj_p_value = p.adjust(p_value, method = "BH"))
+
+BN_HE <- BN_HE %>%
+  mutate(adj_p_value = p.adjust(p_value, method = "BH"))
+
+# Proporcionem els resultats significants per cada parella
+GC_HE_signif <- GC_HE %>% filter(adj_p_value < 0.05)
+BN_HE_signif <- BN_HE %>% filter(adj_p_value < 0.05)
+
+# Taula per GC vs HE
+GC_HE_taula <- GC_HE_signif %>%
+  select(Metabolite, statistic, p_value, adj_p_value) %>%
+  kable(caption = "Metabolits significativament diferents per a malalts de 
+        càncer gàstric respecte pacients san(e)s.", 
+        col.names = c("Metabolit", "Estadístic", "p-value", "p-value ajustat")) %>%
+  kable_styling("striped", full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+  row_spec(1:nrow(GC_HE_signif), color = "black")
+
+# Taula per BN vs HE
+BN_HE_taula <- BN_HE_signif %>%
+  select(Metabolite, statistic, p_value, adj_p_value) %>%
+  kable(caption = "Metabolits significativament diferents per a pacients amb 
+        malaltia gàstrica benigna respecte els san(e)s.", 
+        col.names = c("Metabolit", "Estadístic", "p-value", "p-value ajustat")) %>%
+  kable_styling("striped", full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+  row_spec(1:nrow(BN_HE_signif), color = "black")
+
+
+GC_HE_taula
+BN_HE_taula
+```
+
+Veiem que el grup de metabolits que inclouen l'M48, M89, M138 i M118, entre 
+d'altres, sembla estar relacionat amb malaltia gàstrica. És curiós com el càncer 
+gàstric i la malaltia gàstrica benigna comparteixen metabolits representatius, 
+mentre que el càncer gàstric té més indicadors alterats que la malaltia gàstrica 
+benigna. 
+
+Finalment, utilitzem estadística Bayesiana per a fer un model que identifiqui 
+quins metabolits són més representatius per al càncer gàstric respecte els HE, 
+i per a la malaltia benigna respecte els HE també. Així com un darrer model que 
+compara GC i BN. Els 5 valors més representatius de cada model estan recollits 
+a la **Taula 7**, **Taula 8** i **Taula 9**, respectivament. 
+
+```{r fits_res, echo = F, eval = T}
+
+# Taula per GC vs HE
+GC_HE_table <- head(fit, 5) %>%
+  select(logFC, CI.L, CI.R, P.Value, adj.P.Val, B) %>% 
+  kable(caption = "Metabolits més representatius de càncer gàstric respecte 
+        pacients san(e)s.", 
+        col.names = c("logFC", "CI.L", "CI.R", "p-value", "p-value ajustat", "B")) %>%
+  kable_styling("striped", full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+  row_spec(1:nrow(head(fit, 5)), color = "black")
+
+# Taula per BN vs HE
+BN_HE_table <- head(fit2, 5) %>%
+  select(logFC, CI.L, CI.R, P.Value, adj.P.Val, B) %>%
+  kable(caption = "Metabolits més representatius de malaltia benigna gàstrica 
+        respecte pacients san(e)s.", 
+        col.names = c("logFC", "CI.L", "CI.R", "p-value", "p-value ajustat", "B")) %>%
+  kable_styling("striped", full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+  row_spec(1:nrow(head(fit2, 5)), color = "black")
+
+# Taula per GC vs BN
+GC_BN_table <- head(fit3, 5) %>%
+  select(logFC, CI.L, CI.R, P.Value, adj.P.Val, B) %>% 
+  kable(caption = "Metabolits més representatius de càncer gàstric respecte 
+        malaltia benigna gàstrica.", 
+        col.names = c("logFC", "CI.L", "CI.R", "p-value", "p-value ajustat", "B")) %>%
+  kable_styling("striped", full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#0073B8") %>%
+  row_spec(1:nrow(head(fit3, 5)), color = "black")
+
+GC_HE_table
+BN_HE_table
+GC_BN_table
+```
+
+\newpage
+
+
+# Discussió i limitacions i conclusions de l'estudi
+
+Hem aconseguit identificar quina expressió o manca d'expressió de metabolits 
+s'identifica amb càncer gàstric i malaltia gàstrica benigna, i quins els 
+diferencien. La sobreexpressió dels metabolits u233 i N-AcetylglutamineDerivative 
+són indicadors de patologia gàstrica, conjuntament amb la infraexpressió de 
+Creatinine. Tanmateix, és la sobreexpressió de u144 i infraexpressió de 
+2-Hydroxyisobutyrate que diferencien el càncer gàstric de la patologia gàstrica 
+benigna, més característica per la sobreexpressió de Tropate i infraexpressió de 
+Citrate. Altres marcadors que ens podrien indicar que és càncer gàstric en 
+comptes de malaltia benigna serien l'expressió de 2-Furoylglycine i ATP i la 
+infraexpressió de 1-Methylnicotinamide. 
+
+Els nostres resultats són consistents amb l'article envers el 2-Hydroxyisobutyrate, 
+però a Chan, A. _et al._ [1] els surten especialment rellevants per a identificar 
+càncer gàstric els metabolits 3-indoxylsulfate i alanine. A l'anàlisi de significança 
+estadística, a nosaltres també ens surt un efecte significatiu de l'alanina per a 
+la identificació de càncer gàstric comparat amb pacients san(e)s, però aquest no 
+queda registrat entre les 5 components principals del model de Bayes. Pel que fa 
+la 3-indoxylsulfate, no és un dels 52 metabolits inclosos a l'estudi final, doncs 
+no ha passat el filtratge de _missings_ i de qualitat, el que ens pot indicar que 
+potser hem estat massa estrictes en la filtració de les dades i hauríem d'haver 
+admès una QC_RSD més elevada. Els gràfics de dispersió de QC_RSD ja ens indicaven 
+que la majoria de metabolits tenien una QC_RSD sota el 50%, essent la decisió 
+d'incloure només els inferiors al 20% molt restrictiva. 
+
+D'altra banda, a l'article original també troben rellevant la infraexpressió de 
+1-Methylnicotinamide, que raonen és degut a que els pacients BN i GC tenen una 
+pèrdua del sistema de protecció mucós gàstric; i de la creatinina, una reducció 
+deguda a la pèrdua de massa muscular esquelètica. Pel que fa a la infraexpressió 
+del citrat a pacients de GC, essent aquest metabolit rellevant al cicle de Kreb, 
+Chan, A. _et al._ raonen que la seva falta podria estar relacionada amb l'habilitat 
+del GC d'escapar a la mort cel·lular programada. 
+
+Amb tot, podem dir que els nostres resultats són consistents amb els de l'estudi 
+original, tot i que el model bayesià difereixi del LASSO o el PLS de l'article en 
+algun metabolit. Això és una mostra més de la inespecificitat de les dades, doncs 
+tot i que hem vist que s'intuïa un perfil de metabolits diferent a pacients amb 
+patologia gàstrica i sans, les divergències són subtils tal com hem vist a l'anàlisi 
+de PCA (Figura 2), el heatmap de correlació (Figura 5) o el boxplot de l'expressió 
+de metabolits per classe (Figura 4).
+
+A més, aquest estudi té limitacions. Les dades són escases amb tan sols un(e)s 40 
+pacients per grup, el qual limita la potència estadística dels anàlisis. També, 
+la tria d'aquest(e)s pacients finals es va fer per aparellament per edat, sexe i 
+índex de massa corporal, però podria haver-hi altres variables que no s'hagin 
+tingut en compte per falta d'informació. Àdhuc, com ja hem comentat, les restriccions 
+en la neteja de dades han pogut limitar la informació analitzada, tot i garantir 
+que aquesta fos de qualitat. La imputació de missings també ha pogut afectar 
+parcialment en els resultats, tot i que no significativament. Així mateix, la 
+limitada experiència de l'autora d'aquest document en l'anàlisi de dades òmiques, 
+així com la comprensió parcial de l'enunciat d'aquesta PAC, poden haver influit 
+substancialment en el present estudi que, tanmateix, s'ha fet amb la major 
+implicació possible.
+
+En conjunt, s'ha fet un pre-processat extensiu de dades de metabolits, construït 
+un objecte `SummarizedExperiment` per a treballar-hi amb llibreries de 
+`Bioconductor`, analitzat de manera descriptiva i multivariant les dades del 
+present anàlisi i identificat metabolits rellevants en el diagnòstic diferencial 
+de càncer gàstric respecte patologia gàstrica benigna i pacients saludables. 
+
+Es pot trobar tota la informació complementària al github:
+
+https://github.com/aid-pm/AnalisiOmiques/tree/main/PEC1
+
+# Generació d'outputs
+
+```{r outputs, echo = T, eval = T}
+save(se_norm, file = "objecte_dades_meta.Rda")
+write.table(data, file = "dades_originals.txt", sep = "\t", row.names = FALSE, 
+            quote = FALSE)
+write.table(peak, file = "peak_original.txt", sep = "\t", row.names = FALSE, 
+            quote = FALSE)
+```
+
+
+# Referències
+
+[1] Chan, A., Mercier, P., Schiller, D. et al. 1H-NMR urinary metabolomic 
+profiling for diagnosis of gastric cancer. Br J Cancer 114, 59–62 (2016). 
+https://doi.org/10.1038/bjc.2015.414
+
+[2] Broeckling CD, Beger RD, Cheng LL, et al. Current Practices in LC-MS 
+Untargeted Metabolomics: A Scoping Review on the Use of Pooled Quality Control 
+Samples. Anal Chem. 2023 Dec 26;95(51):18645-18654. doi: 10.1021/acs.analchem.3c02924.
+
+[3] SummarizedExperiment for Coordinating Experimental Assays, Samples, and 
+Regions of Interest [Internet]. [cited 2024 Oct 30]. Available from: 
+https://www.bioconductor.org/packages/devel/bioc/vignettes/SummarizedExperiment/inst/doc/SummarizedExperiment.html
+
+[4] Sánchez Pla, Alex. ASPteaching/Omics_Data_Analysis-Case_Study_0-Introduction_to_BioC [Internet]. 
+[cited 2024 Oct 30]. Available from: 
+https://github.com/ASPteaching/Omics_Data_Analysis-Case_Study_0-Introduction_to_BioC?tab=readme-ov-file
+
+[5] Morgan M. Working With Data: SummarizedExperiment [Internet]. 2015 
+[cited 2024 Oct 30]. Available from: 
+https://www.bioconductor.org/help/course-materials/2015/Uruguay2015/V2-WorkingWithData.html
+
+[6] Li, Y., Wang, C. and Chen, L.: SDAMS: an R Package for differential 
+expression analysis of single-cell RNA sequencing data (Manuscript).
+
+[7] Broadhurst, D., Goodacre, R., Reinke, S.N. et al. Guidelines and 
+considerations for the use of system suitability and quality control samples in 
+mass spectrometry assays applied in untargeted clinical metabolomic studies. 
+Metabolomics 14, 72 (2018). https://doi.org/10.1007/s11306-018-1367-3
+
+[8] Jankevics A, Weber RJM. Peak Matrix Processing for metabolomics datasets 
+[Internet]. [cited 2024 Nov 1]. Available from: https://www.bioconductor.org/packages/release/bioc/vignettes/pmp/inst/doc/pmp_vignette_peak_matrix_processing_for_metabolomics_datasets.html
+
+[9] Joo J. Processing quantitative metabolomics data with the qmtools package 
+[Internet]. 2024 [cited 2024 Nov 1]. Available from: https://bioconductor.org/packages/devel/bioc/vignettes/qmtools/inst/doc/qmtools.html#1_Introduction
+
+[10] Benjamini YHY (1995) Controlling the false discovery rate: a practical and 
+powerful approach to multiple testing. J R Stat Soc Ser B Methodol 57 (1): 289–300.
+
+[11] Krishnaswamy K, Raghuram TC. Effect of leucine and isoleucine on brain 
+serotonin concentration in rats. Life Sci. 1972 Dec 22;11(24):1191–7. 
+
+[12] Wessels AG, Kluge H, Hirche F, Kiowski A, Schutkowski A, Corrent E, et al. 
+High Leucine Diets Stimulate Cerebral Branched-Chain Amino Acid Degradation and 
+Modify Serotonin and Ketone Body Concentrations in a Pig Model. PLoS One 
+[Internet]. 2016 Mar 1 [cited 2024 Nov 2];11(3). Available from: 
+https://pubmed.ncbi.nlm.nih.gov/26930301/
