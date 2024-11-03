@@ -4,3 +4,5 @@ En aquest repositori de github trobareu:
 - el codi R per a l' exploració de les dades (Perramon-Malavez-Aida-PEC1.Rmd)
 - dades en format text (dades_originals.txt i peak_original.txt)
 - les metadades sobre el dataset en un arxiu markdown (metadades.md)
+
+També hi ha un arxiu .log per si fos necessari, surt del knit de Rmarkdown a pdf per utilitzar _xelatex_.
