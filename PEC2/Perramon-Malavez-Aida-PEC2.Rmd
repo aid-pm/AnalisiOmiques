@@ -1,0 +1,1135 @@
+---
+title: "Informe de la PEC2 d'Anàlisi de dades òmiques"
+author: "Aida Perramon Malavez"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    latex_engine: pdflatex
+---
+
+\newpage
+# Abstract
+
+En aquesta PAC, hem analitzat les dades de murí de l'estudi de Sharma-Kuinkel BK
+_et al._ [1] que ens proporcionen a l'enunciat de la PAC. Aquest estudi inocula 
+_Staphylococcus aureus_ a un seguit de ratolins i compara l'expressió gènica 
+segons l'estat infecciós i el tractament aplicat: cap tractament, vancomicina o 
+linezolid. Els bacteris _S. aureus_ són una causa comuna d'infeccions nosocomials 
+i comunitàries, amb la seva versió resistent a meticil·lina (MRSA) implicada en 
+infeccions greus. Es creu que les toxines bacterianes juguen un paper important 
+en la patogènesi d'aquestes infeccions. La inhibició de la síntesi de proteïnes 
+bacterianes per antibiòtics com linezolid (L) pot reduir la producció de toxines 
+i millorar el resultat clínic. En canvi, el tractament amb vancomicina (V), no 
+genera aquesta inhibició proteica. És per això que aquest estudi compara els 
+efectes de linezolid i vancomicina sobre l'expressió gènica en un model de sepsis 
+per MRSA, amb l'objectiu de comprendre millor com aquests antibiòtics modulen 
+la resposta gènica de l'hoste i el patogen. En l'estudi original, surtien 
+diferències en l'expressió de gens com  Cxcl9, Cxcl10, Il1r2, Cd14 i Nfkbia entre 
+grups. En el present estudi on treballem amb una submostra de les dades originals, 
+les diferències les trobem en l'expressió de Cxcl9, però no la resta. Trobem que 
+L dóna una resposta més forta immunològicament parlant, però que V produeix un 
+efecte més antiinflamatori. 
+
+Aquest estudi demostra que, en comparació amb V, el tractament amb L s'associa 
+amb nivells reduïts de producció de toxines, diferències en la resposta 
+inflamatòria de l'hoste i característiques diferents d'expressió gènica de l'hoste 
+en la sèpsia per MRSA, però no és del tot coherent amb l'estudi principal, 
+indicant que probablement m'he equivocat en alguna cosa que no he estat capaç 
+d'identificar, com indico a la discussió d'aquesta PAC. 
+
+# Objectius de l'Estudi
+
+L'objectiu principal d'aquest estudi és intentar caracteritzar, a través del 
+canvi en l'expressió gènica, l'efecte de la infecció causada per 
+_Methicillin Resistant Staphylococcus aureus_ (MRSA) i del tractament amb els 
+antibiòtics linezolid (L) - un antibiòtic que inhibeix la síntesi de proteïnes 
+bacterianes - i vancomicina (V) - un agent actiu sobre la paret cel·lular - o la 
+falta de tractament.
+   
+A diferència de l'estudi principal, no tenim dades més que d'expressió gènica.
+
+\newpage
+
+# Materials i Mètodes
+
+## Requeriments computacionals per a l'anàlisi
+
+Hem treballat amb RStudio, amb la versió d'R 4.4.2. Han estat necessàries les 
+següents llibreries per a l'anàlisi i col·lecció de dades:
+
+```
+The BiocManager package from Bioconductor and:
+- mouse4302.db
+- pcaMethods
+- limma
+- arrayQualityMetrics
+- affy
+- affyPLM
+- Biobase
+- genefilter
+- ComplexHeatmap
+- clusterProfiler
+- ReactomePA
+
+Other R packages:
+- readxl
+- dplyr
+- kableExtra
+- tidyr
+- ggplot2
+- reshape2
+- gridExtra
+- reshape2
+- gplots
+- openxlsx
+```
+```{r setup, include = FALSE, echo = F}
+options(warn = -1)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r requirements, echo = F, eval = T, warning = FALSE}
+packages <- c("readxl", "dplyr", "ggplot2", "gridExtra", "kableExtra",
+              "tidyr", "BiocManager", "pcaMethods", "limma", "reshape2",
+              "ComplexHeatmap", "arrayQualityMetrics","genefilter", "Biobase", 
+              "affy", "affyPLM", "mouse4302.db", "clusterProfiler",
+              "gplots", "ReactomePA", "openxlsx")
+
+for (pkg in packages) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+        if (pkg %in% c("pcaMethods", "limma", "ComplexHeatmap","arrayQualityMetrics",
+                       "genefilter", "Biobase", "affy", "affyPLM", "mouse4302.db",
+                       "clusterProfiler", "ReactomePA")) {
+            BiocManager::install(pkg)
+        } else {
+            install.packages(pkg)
+        }
+    }
+}
+
+invisible(lapply(packages, function(pkg) {
+        suppressWarnings(suppressPackageStartupMessages(library(pkg,                                                                   character.only = TRUE)))
+    }))
+
+```
+
+## Obtenció de les dades
+
+Accedim a l'enllaç de descàrrega de dades que se'ns proporciona a l'enunciat 
+de la PEC [1]. És un arxiu `.tar` ple d'arxius `.CEL` que tal com s'explica a 
+teoria és el format habitual de la informació de microarrays. Ho fem amb codi per 
+tal d'aconseguir que sigui un procés automàtic i reproduible. Després, apliquem 
+la funció de `selectSamples` que se'ns proporciona per excloure les mostres 
+extretes a les 2h i obtenir un subset de 4 mostres de cada grup segons la 
+llavor random de l'identificador UOC: 20052001198767 (crec que és aquest 
+número que és el que està al carnet). Provant això, el codi diu que la llavor 
+subministrada no és un enter vàlid, així que he fet servir el DNI (53643032V).
+
+```{r dades, echo = T, eval = T, warning = FALSE}
+# 1. Descarreguem les dades raw del web tal i com surt als exemples de classe
+# url <- "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE38531&format=file"
+# download.file(url, destfile = "GSE38531_RAW.tar", mode = "wb")
+# Per tal de poder reproduir l'anàlisi, cal descomentar aquesta línia de codi. 
+# Ara l'he comentat per reduir el cost computacional
+
+# 2. Descomprimim el fitxer .tar per obtenir els fitxers .CEL
+untar("GSE38531_RAW.tar", exdir = "GSE38531_RAW")
+
+# 3. Accedim a la llista de fitxers .CEL
+all_files <- list.files("GSE38531_RAW", pattern = "\\.CEL")
+```
+
+He modificat lleugerament el format de la llista de fitxers per adaptar-ho a la 
+funció de selectSamples, ja que no tenim una taula com la de l'enunciat si no que 
+la informació de temps, tractament i infecció la trobem al nom de cada mostra. 
+Si conté "2h", vol dir que és la mostra efectuada a les 2h d'infecció. Si hi ha 
+"Ctl" al nom, significa que és un control, és a dir, un ratolí no infectat. Si 
+conté al nom "van" o "lin" vol dir que és tractat amb V o L respectivament. I 
+si no els conté, implica que no ha estat tractat aquell ratolí. Finalment, he agafat 
+com a nom de la mostra només la part d'ID GMSXXXXXX. Seguint això, modifiquem 
+les dades:
+
+
+```{r dataset, echo = T, eval = T, warning = FALSE}
+# 1. Fem el dataframe amb els fitxers
+allTargets <- data.frame(sample = all_files, stringsAsFactors = FALSE)
+
+# 2. Creem la columna de temps de les mostres segons l'hora que surti al nom
+allTargets$time <- ifelse(grepl("2h", allTargets$sample), "hour 2", 
+                          ifelse(grepl("24h", allTargets$sample), "hour 24", 
+                                                                  "hour 0"))
+
+# 3. Creem la columna d'infecció segons si hi ha "Ctl" al nom del fitxer
+allTargets$infection <- ifelse(grepl("Ctl", allTargets$sample), "uninfected", 
+                                                                "infected")
+
+# 4. Creem la columna d'agent segons si és un ratolí tractat o no, i segons el 
+# tractament amb V o L
+allTargets$agent <- ifelse(grepl("Van", allTargets$sample, ignore.case = TRUE), 
+                           "V", ifelse(grepl("lin", allTargets$sample, 
+                                             ignore.case = TRUE), "L", 
+                                             "untreated"))
+
+# 5. Agafem de nom de la mostra només la part de GSMxxxxxx que és la que es 
+# mostra a la taula de la PEC
+allTargets$sample <- sub("_.*", "", allTargets$sample)
+
+head(allTargets) # per comprovar que hàgim fet bé la taula i poder comparar amb 
+                 # l'enunciat
+```
+
+Llavors apliquem la funció a les dades:
+
+```{r funcio, echo = F, eval = T, warning = FALSE}
+filter_microarray <- function(allTargets, seed = 123) {
+  # Configurar la semilla aleatoria
+  set.seed(seed)
+  
+  # Filtrar las filas donde 'time' no sea 'hour 2'
+  filtered <- subset(allTargets, time != "hour 2")
+  
+  # Dividir el dataset por grupos únicos de 'infection' + 'agent'
+  filtered$group <- interaction(filtered$infection, filtered$agent)
+  
+  # Seleccionar 4 muestras al azar de cada grupo
+  selected <- do.call(rbind, lapply(split(filtered, filtered$group), function(group_data) {
+    if (nrow(group_data) > 4) {
+      group_data[sample(1:nrow(group_data), 4), ]
+    } else {
+      group_data
+    }
+  }))
+  
+  # Obtener los índices originales como nombres de las filas seleccionadas
+  original_indices <- match(selected$sample, allTargets$sample)
+
+  # Modificar los rownames usando 'sample' y los índices originales
+  rownames(selected) <- paste0(selected$sample, ".", original_indices)
+  
+  # Eliminar la columna 'group' y devolver el resultado
+  selected$group <- NULL
+  return(selected)
+}
+```
+
+```{r res_funcio, echo = T, eval = T, warning=F}
+filtered_samples <- filter_microarray(allTargets, seed = 53643032)
+```
+
+## Estructura i descripció de les dades
+
+Finalment ens hem quedat amb les mostres:
+
+```{r mostra_dades, echo = F, eval = T}
+filtered_samples
+```
+
+Per tant, tenim:
+
+```{r N_samples, echo = F, eval = T}
+filtered_samples <- filtered_samples %>%
+  mutate(
+    sample = as.factor(sample),
+    time = as.factor(time),
+    infection = as.factor(infection),
+    agent = as.factor(agent)
+  )
+summary(filtered_samples)
+```
+Ens hem quedat amb 24 mostres tal i com diu l'enunciat, 12 de les quals estan 
+preses a temps 0h i la resta a temps 24h, la meitat són de ratolins infectats i 
+l'altra meitat de ratolins no infectats. A més, tenim 8 mostres de tractament 
+amb L, 8 de tractament amb V i 8 de no tractats. 
+
+Si mirem el creuament temps, infecció i agent, veiem que:
+
+```{r table_samples, echo = F, eval = T}
+table(filtered_samples$time, filtered_samples$infection, filtered_samples$agent)
+```
+
+Veiem doncs que tenim un dataset balancejat. 
+
+## Creació del contenidor de dades
+
+A les referències proporcionades a classe he vist dues metodologies per llegir 
+les dades `.CEL`, la llibreria _affy_ de Bioconductor i la _oligo_. Com a 
+l'exemple del professor [2] s'utilitza el primer, és el que també farem servir 
+en aquesta PEC. 
+
+```{r exp_set, echo = T, eval = T, warning=F}
+# 1. Ens quedem amb els fitxers que corresponen a les nostres 24 mostres
+files <- list.files("GSE38531_RAW", pattern = "\\.CEL", full.names = TRUE)
+IDs_files <- sub("_.*", "", basename(files))
+final_samples <- files[IDs_files %in% filtered_samples$sample]
+
+# 2. Guardem les metadades per introduir-les a l'objecte ExpressionSet
+sampleInfo <- AnnotatedDataFrame(filtered_samples)
+sampleNames(sampleInfo) <- filtered_samples$sample # de nom no volem el .ordre
+
+# 3. Creem l'ExpressionSet directament gràcies a la llibreria d'oligo
+rawData <- read.affybatch(filenames = final_samples, phenoData = sampleInfo)
+rawData
+```
+
+Llavors ja tenim el nostre _ExpressionSet_ muntat. Ens diu que tenim 45,101 nombre 
+de gens i 24 mostres, i que les anotacions són de ratolí 4302 i hi ha 1,002 x 
+1,002 _features_. L'objecte sembla ben creat, i hem carregat la llibreria 
+`mouse4302.db` d'anotacions, que sembla la correcta també segons la referència [1].
+
+Si mirem les dades d'expressió:
+
+```{r expression, echo = F, eval = T}
+matrix_expr <- exprs(rawData)
+head(matrix_expr)
+summary(matrix_expr)
+
+dims<-dim(matrix_expr)
+print(paste("Dimensions:", dims[1], "x", dims[2]))
+```
+Veiem que efectivament tenim una matriu de sondes x mostres, i cada valor 
+representa la intensitat log2 de l'expressió gènica, que falta normalitzar-la.
+Tenim  1,004,004 sondes de cadascuna de les 24 mostres. 
+
+## Anàlisi descriptiu i control de qualitat
+
+Per fer la neteja de dades i el control de qualitat, la primera cosa que 
+explorarem serà si hi ha _missings_ a les dades d'expressió:
+
+```{r missings,  echo = F, eval = T}
+missings <- sum(is.na(matrix_expr))
+print(paste("Número total de missings: ", missings))
+```
+Al no haver-hi _missings_, podem procedir amb el control de qualitat. A l'exemple 
+prèviament mencionat [2] veiem que es fa el control de qualitat amb la llibreria 
+`arrayQualityMetrics`, però el seu output és una carpeta externa i no es veuria 
+directament a l'informe de la PEC. Poso igualment el command i l'execució ja que 
+dóna molta informació de les dades i és una ajuda a la seva exploració.
+
+```{r quality, echo = T, eval = T}
+# arrayQualityMetrics(expressionset = rawData, outdir = "QC_Report_raw",
+# do.logtransform = TRUE) # cal posar logtransform perquè no són dades normalit.
+```
+
+Fent aquesta anàlisi, hem trobat que a la mostra GSM944865 es detecten _outliers_ 
+per distàncies entre _arrays_, i a la mostra GSM944858 se'n detecten per mitjà de 
+Relative Log Expression (RLE). Farem aquests dos anàlisis de qualitat per 
+veure si efectivament hi ha aquests _outliers_. També mirarem la informació que 
+dónen les seves dues components principals, i si es defineixen grups específics, 
+fent un Principal Components Analysis (PCA). 
+
+```{r pca, echo = T, eval = T}
+# Calculem el PCA a partir de la matriu d'expressió
+pca_result <- prcomp(t(matrix_expr), scale = FALSE)
+```
+
+És important saber que la gràfica de Relative Log Expression (RLE) mostra les 
+desviacions relatives en l'expressió dels gens entre les mostres analitzades. Els 
+boxplots que estan centrats lluny del 0 indiquen _outliers_, ja que això indica 
+que hi ha una desviació sistemàtica en les dades d'aquella mostra en comparació 
+amb les altres. Un altre cas problemàtic seria el de boxplots amb alt rang de 
+dispersió, ja que impliquen una major variabilitat en les dades d'aquella mostra. 
+És a dir, que diversos microarrays haurien identificat coses diferents. 
+Per identificar aquestes mostres problemàtiques, s'utilitzat l'estadístic 
+_Kolmogorov-Smirnov_. Aquest càlcul compara els valors RLE de cada _array_ amb 
+la distribució general dels valors RLE de totes les mostres combinades. Això 
+permet detectar mostres que es desvien significativament del patró general. Per 
+sort, es pot fer gràcies al paquet `AffyPLM` [3], que fa un _probe level model_ 
+(PLM) per calcular l'RLE molt més fàcil d'executar amb un objecte `AffyBatch` com 
+tenim. (Primer havia intentat fer-ho diferent, manualment calculant KS i m'estava 
+tornant boja perquè el cost computacional és elevadíssim.)
+
+```{r RLE, echo = T, eval = T}
+dataPLM <- fitPLM(rawData) 
+```
+
+Pel que fa al càlcul de distàncies, l'algoritme `arrayQualityMetrics` utilitza 
+la distància L1 entre els valors de les sondes de dos _arrays_, i es detecten 
+_outliers_  calculant la suma de les distàncies d'un _array_ respecte a tots els 
+altres. Aquells _arrays_ amb un valor excepcionalment elevat es consideren 
+possibles _outliers_. 
+
+```{r calcul_dist, echo = T, eval = T}
+# 1. Calculem les distàncies entre arrays
+manDist <-  dist(t(matrix_expr), method = "manhattan") # Per calcular la dist
+                                                       # com a aqmetrics
+
+# 2. Convertim les distàncies a una matriu i fem la suma de distàncies
+dist_matrix <- as.matrix(manDist)
+sum_dist <- rowSums(dist_matrix)
+
+# 3. Identifiquem outliers basant-nos en valors excepcionals. Per a això definim 
+# un llindar: mitjana + 2 * desviació estàndard que és el que considerarem com 
+# molt lluny de la mitjana.
+mean_dist <- mean(sum_dist)
+sd_dist <- sd(sum_dist)
+thres <- mean_dist + 2 * sd_dist
+outliers_dist <- which(sum_dist > thres)
+```
+
+
+## Neteja i filtratge de dades. Normalització.
+
+Com hem vist a algun exemple de la teoria, filtrarem les sondes eliminant sondes 
+duplicades i ens quedarem amb el 10% de sondes més variable, com s'indica a 
+l'enunciat. Ho farem amb la funció de _nsFilter_ que ens permet aplicar els filtres 
+directament sobre la rawData, prèvia normalització de les dades d'expressió.
+
+```{r filtre_sondes, echo = T, eval = T, warning = F}
+normData <- rma(rawData)
+normData
+# fData <- nsFilter(eset = normData, require.entrez=F, remove.dupEntrez=TRUE, 
+#                    var.func=IQR, var.cutoff=0.9, filterByQuantile=TRUE)
+# Això em donava error perquè 'var.func' must be a function, però ja ho és...
+
+fData <- nsFilter(eset = normData, require.entrez = F, remove.dupEntrez = T, 
+                  var.func = function(x) IQR(x, na.rm = TRUE), var.cutoff = 0.9, 
+                  filterByQuantile = TRUE) # IQR 90% implica quedar-nos amb el 
+                                           # 10% de major variància
+fData
+```
+Ens hem quedat doncs amb 2,048 sondes, una reducció substancial respecte el 
+mil·lió original. Veiem que l'objecte fData que conté les dades normalitzades i 
+filtrades ara conté també les transformacions sobre les dades. Es veu que hi 
+havia 24,561 _arrays_ que estaven duplicats, i que se n'han descartat 18,428 amb 
+la restricció de la variància. De fet, al fer la normalització ja s'aplica un 
+pre-processat i s'han reduit els _arrays_ a 45,101, que correspon al nombre de 
+gens que ens sortia que tenia el dataset original, per tant, és coherent.
+
+Després de prova i error entre les llibreries _affy_ [4] i _oligo_ [5], i molts 
+dubtes sobre com filtrar les dades per a què es quedés la informació a l'objecte 
+`AffyBatch` o `ExpressionFeatureSet`, m'he adonat buscant a tots els exemples [2,6]
+possibles i teoria de classe que es fa primer l'anàlisi exploratori, després es 
+normalitzen les dades i per últim es filtren. Així és com està també a l'enunciat 
+de la PEC però em resultava estrany que s'haguessin de normalitzar previ filtratge. 
+
+Finalment, verificarem la normalització de les dades amb un _boxplot_ comparatiu 
+de les dades d'expressió previ i posterior a la normalització. També he volgut 
+repetir l' `arrayQualityMetrics` per veure si seguien havent-hi _outliers_, 
+però no he repetit els gràfics i anàlisis previs, simplement he reavaluat els 
+resultats de la funció (si no la pràctica es feia molt llarga).
+
+```{r aqm, echo = T, eval = T}
+# arrayQualityMetrics(expressionset = fData$eset, outdir = "QC_Report")
+```
+
+Sembla que se segueix detectant outliers a GSM944858. Surt a l'anàlisi amb 
+boxplots. Ho hauríem de veure a la comparació per boxplots de la normalització. 
+Després de prova i error, parlar amb el profe, mirar mil referències, decideixo 
+complementar l'anàlisi del PCA que ens permet veure si hi ha efecte batch, amb 
+un plot MDS. El que trobo és que sembla que hi hagi dos grups definits entre les 
+mostres, però no trobo un motiu evident. No sembla que sigui per la variable 
+temps, ni tractament ni estat d'infecció. Per tant:
+
+```{r final_data, echo = T, eval = T}
+finalData <- fData
+```
+
+## Construcció de les matrius de disseny i de contrastos
+
+Seguidament, construirem les matrius de disseny i de contrastos per a fer els 
+models lineals de comparació entre:
+
+- Infectats _vs_ no infectats sense tractament
+- Infectats _vs_ no infectats tractats amb LINEZOLID
+- Infectats _vs_ no infectats tractats amb VANCOMICINA
+
+La selecció de gens expressats diferencials consisteix bàsicament en fer algun 
+tipus de prova, generalment sobre una base genètica, per comparar l'expressió 
+gènica entre grups. Popularment, s'han generalitzat els models lineals per 
+a l'anàlisi de microarrays, pels quals es va desenvolupar el paquet `limma` amb 
+el qual treballarem posteriorment [8][9]. 
+
+En l'anàlisi amb `limma`, hi ha dues peces clau que estructuren l'experiment i
+les comparacions a realitzar:
+
+1. **Matriu de disseny**: descriu quines mostres de RNA estan associades a cada 
+_array_. És a dir, codifica com s'organitzen les condicions experimentals en les 
+mostres analitzades. Essencial per ajustar el model estadístic.
+
+2. **Matriu de contrastos**: defineix quines comparacions específiques es volen 
+realitzar entre les condicions experimentals. 
+
+```{r disseny, echo = T, eval = T}
+phenoData <- pData(finalData$eset)
+designMat <- model.matrix(~0+infection:agent, data = phenoData) # Posem 0 per 
+                                                      # evitar la intercepció
+head(designMat)
+```
+Hem creat correctament la matriu de disseny, ja que tenim una matriu diagonal 
+d'1 i 0 segons a la categoria a què pertanyen les mostres, i surten totes les 
+comparacions que volem fer. Ara explicitarem aquestes comparacions a la matriu 
+de contrastos. Ho hem de fer amb els noms de columna que surten a la matriu de 
+disseny, però el ":" dóna errors a `makeContrasts` així que el que primer 
+farem serà canviar aquests noms:
+
+```{r contrast, echo = T, eval = T}
+colnames(designMat) <- make.names(colnames(designMat)) # : es torna .
+
+cont.matrix <- makeContrasts(
+  No_tractats_I_vs_noI = infectioninfected.agentuntreated - 
+                         infectionuninfected.agentuntreated,
+  Vancomicina_I_vs_noI = infectioninfected.agentV - infectionuninfected.agentV,
+  Linezolid_I_vs_noI = infectioninfected.agentL - infectionuninfected.agentL,
+  levels = designMat)
+
+cont.matrix
+```
+Comprovem que la matriu de contrastos està ben feta.
+
+## Obtenció de les llistes de gens diferencialment expressats per a cada comparació
+
+Un cop definides la matriu de disseny i els contrastos podem obtenir la llista 
+de gens diferencialment expressats fent el model linear amb `limma` per a cada 
+comparativa definida. Estudiant el nivell de significança obtingut per cada gen 
+segons el model podrem decidir, per a cada gen i per a cada comparació, quines 
+mostres podem considerar com a gens diferencialment expressats.
+
+El mètode implementat al paquet `limma` utilitza models bayesians. A més, ja 
+proporciona els p-valors ajustats per testatge múltiple, per tal de controlar la 
+quantitat de falsos positius que es poden generar a causa de la gran quantitat de 
+contrastos realitzats simultàniament. A aquest paquet, l'ajust es fa utilitzant 
+el mètode de Benjamini i Hochberg [10], que controla la taxa de falsos positius.
+
+```{r dif_expr, echo = T, eval = T}
+# 1. Ajustem el model de regressió lineal amb limma
+final_matrix_expr <- exprs(finalData$eset)
+fit <- lmFit(final_matrix_expr, designMat)
+
+fit.main<-contrasts.fit(fit, cont.matrix)
+fit.main<-eBayes(fit.main)
+
+# 2. Resultats del model, ajustant per múltiples comparacions (FDR = Benjamini
+# i Hochberg)
+# Infectats vs No Infectats sense tractament
+results_nt <- topTable(fit.main, coef = "No_tractats_I_vs_noI", 
+                     number = nrow(fit.main), adjust="fdr")
+
+# Infectats vs No Infectats Vancomicina 
+results_V <- topTable(fit.main, coef = "Vancomicina_I_vs_noI", 
+                     number = nrow(fit.main), adjust="fdr")
+
+# Infectats vs No Infectats Linezolid
+results_L <- topTable(fit.main, coef = "Linezolid_I_vs_noI", 
+                     number = nrow(fit.main), adjust="fdr")
+
+# 3. Filtrem els gens significatius per a cada comparació (95% de significança)
+
+res<-decideTests(fit.main, method="separate", adjust.method="fdr", p.value=0.05, 
+                 lfc=1)
+sum.res.rows<-apply(abs(res),1,sum)
+res.selected<-res[sum.res.rows!=0,] 
+```
+
+Veurem posteriorment que no surt cap gen diferencialment expressat. Per això, 
+hem decidit agafar el p-valor no ajustat per tal de poder procedir amb la PAC:
+
+```{r sad_solution, echo = T, eval = T}
+# 3.1. Filtrem els gens significatius per a cada comparació (95% de significança)
+res2<-decideTests(fit.main, method="separate", adjust.method="none", 
+                  p.value=0.05, lfc=1)
+sum.res.rows2<-apply(abs(res2),1,sum)
+res.selected2<-res2[sum.res.rows2!=0,] 
+```
+
+Hem fet el diagrama de Venn de les expressions diferenciades.
+
+## Anotació dels gens
+
+Com diu l'enunciat, l'anàlisi amb `limma` ens arreplega llistat d'identificadors 
+basats en els identificadors originals. Els haurem d'anotar, és a dir, 
+associar-los algun identificador com "Symbol", "EntrezID" o "EnsemblID"
+
+Per tant, un cop tenim les taules de resultats construides, buscarem informació 
+al paquet de gens del ratolí que sembla que estigui associat a aquest treball 
+que és el `mouse4302.db`. He utilitzat els recursos de [8]:
+
+```{r anotacions, echo = T, eval = T}
+# Funció per anotar les taules
+annotatedTopTable <- function(topTab, anotPackage)
+{
+ topTab <- cbind(PROBEID=rownames(topTab), topTab)
+ myProbes <- rownames(topTab)
+ thePackage <- eval(parse(text = anotPackage))
+ geneAnots <- AnnotationDbi::select(thePackage, myProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+ annotatedTopTab<- merge(x=geneAnots, y=topTab, by.x="PROBEID", by.y="PROBEID")
+return(annotatedTopTab)
+}
+
+# Infectats vs No Infectats sense tractament
+results_nt_na <- topTable(fit.main, coef = "No_tractats_I_vs_noI", 
+                     number = nrow(fit.main), adjust="none")
+
+# Infectats vs No Infectats Vancomicina 
+results_V_na <- topTable(fit.main, coef = "Vancomicina_I_vs_noI", 
+                     number = nrow(fit.main), adjust="none")
+
+# Infectats vs No Infectats Linezolid
+results_L_na <- topTable(fit.main, coef = "Linezolid_I_vs_noI", 
+                     number = nrow(fit.main), adjust="none")
+
+# Anotem les taules sense ajustar per a què hi hagi algun gen diferencial
+topAnnotated_NT <- annotatedTopTable(results_nt_na, 
+                                     anotPackage = "mouse4302.db")
+topAnnotated_V <- annotatedTopTable(results_V_na, anotPackage = "mouse4302.db")
+topAnnotated_L <- annotatedTopTable(results_L_na, anotPackage = "mouse4302.db")
+
+# Guardem els resultats en fitxers CSV
+write.csv(topAnnotated_NT, file = "topAnnotated_NT.csv")
+write.csv(topAnnotated_V, file = "topAnnotated_V.csv")
+write.csv(topAnnotated_L, file = "topAnnotated_L.csv")
+```
+
+Gràcies a les anotacions, podrem visualitzar els gens diferencialment expressats 
+però sabent quin gen específicament és. Per fer-ho, utilitzarem un volcano plot 
+i un _heatmap_ d'expressió.
+
+## Anàlisi de la significació biològica
+
+Un cop anotats els gens podem intentar interpretar els resultats intentant 
+determinar si les llistes es troben enriquides en algunes categories biològiques.
+
+Per això podem dur a terme una anàlisi de sobre-representació o un 
+_Gene Set Enrichment Analysis_. Ens indica l'enunciat que podem utilitzar per a 
+això el paquet `clusterProfiler` que permet fer totes dues anàlisis de forma 
+molt similar i que també permet, de forma molt senzilla, visualitzar els 
+resultats de l'anàlisi de significació biològica.
+
+He fet servir de guia l'exemple [2] del professor. Utilitzem llavors les eines 
+_Gene Ontology_ (GO) i _Kyoto Encyclopedia of Genes and Genomes_ (KEGG). El GO 
+ajuda a identificar processos biològics (PB), components cel·lulars (CC) o funcions 
+moleculars (FM) associades als gens diferencialment expressats. Ofereix tres grans 
+categories (PB, CC, FM) per identificar l'associació dels gens amb funcions 
+específiques, però no està directament lligat a vies metabòliques o de 
+senyalització. Per altra banda, el KEGG permet identificar vies biològiques o 
+metabòliques implicades en els canvis d'expressió gènica observats, és a dir, 
+indica vies específiques com la via metabòlica (glucòlisi, cicle de Krebs...)
+
+```{r sign_bio, echo = T, eval = T}
+
+# Funció per realitzar enriquiment per GO i KEGG per una llista de topAnnotated
+enrich_analysis <- function(topAnnotated, pvalue_threshold = 0.15) {
+  # Filtrar gens segons el valor de p
+  DEGs <- topAnnotated[topAnnotated$P.Value < pvalue_threshold, ]
+  geneIds <- DEGs$SYMBOL
+  
+  # Convertir els símbols dels gens a identificadors d'Entrez
+  entrezIds <- bitr(geneIds, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = mouse4302.db)
+  
+  # Enriquiment per GO
+  enrich_GO <- enrichGO(gene = entrezIds$ENTREZID, 
+                        OrgDb = mouse4302.db, 
+                        ont = "BP",  # Especifica el tipus de GO (BP, CC, FM)
+                        pvalueCutoff = pvalue_threshold)
+  
+  # Enriquiment per KEGG
+  enrich_KEGG <- enrichKEGG(gene = entrezIds$ENTREZID, 
+                            organism = "mmu", 
+                            pvalueCutoff = pvalue_threshold)
+  
+  # Retornar els resultats
+  return(list(enrich_GO = enrich_GO, enrich_KEGG = enrich_KEGG))
+}
+
+# Aplicar la funció per als tres conjunts de dades
+enrich_NT <- enrich_analysis(topAnnotated_NT, pvalue_threshold = 0.15)
+enrich_V <- enrich_analysis(topAnnotated_V, pvalue_threshold = 0.15)
+enrich_L <- enrich_analysis(topAnnotated_L, pvalue_threshold = 0.15)
+
+# Guardar els resultats d'enriquiment en fitxers CSV
+write.xlsx(list(
+  "GO_NT" = as.data.frame(enrich_NT$enrich_GO),
+  "KEGG_NT" = as.data.frame(enrich_NT$enrich_KEGG),
+  "GO_V" = as.data.frame(enrich_V$enrich_GO),
+  "KEGG_V" = as.data.frame(enrich_V$enrich_KEGG),
+  "GO_L" = as.data.frame(enrich_L$enrich_GO),
+  "KEGG_L" = as.data.frame(enrich_L$enrich_KEGG)
+), file = "enrich_results.xlsx")
+
+```
+
+En aquest cas, agafem un p-valor de 0.15 en comptes del 95% de significança ja que 
+si no seríem massa restrictius i potser no surten suficients gens per a l'anàlisi.
+
+\newpage
+
+# Resultats
+
+## Anàlisi descriptiu i control de qualitat
+
+L'anàlisi de distàncies entre mostres el podem trobar a la **Figura 1**. Hem 
+seguit el mateix procediment que a la funció `arrayQualityMetrics` [7].
+
+```{r dist, echo = F, eval = T, fig.width = 6, fig.height = 6, fig.align = 'center', fig.cap= "Heatmap de la distància entre mostres per la rawData."}
+# Outliers
+print(paste("Outliers detectats:", paste(names(outliers_dist), collapse = ", ")))
+
+# Heatmap de distàncies
+Heatmap(as.matrix(manDist), 
+         name = "Distància", 
+         col = colorRampPalette(c("blue", "white", "red"))(100),
+         column_title = "Heatmap de distàncies entre mostres")
+```
+En aquest cas, comprovem com es detecten els _outliers_ GSM944854 i GSM944865, 
+no obtenint el primer per `arrayQualityMetrics`. Probablement, el nostre llindar 
+de distància sigui més restringent que el de la funció. Amb el heatmap podem 
+validar aquests resultats. 
+
+Pel que fa a l'RLE, a la **Figura 2** podem veure'n els resultats.
+
+```{r RLE_res, echo = F, eval = T, fig.width = 8, fig.align = 'center', fig.height = 5, fig.cap = "Boxplot de la Relative Log Expression (RLE) per la rawData."}
+RLE_vals <- RLE(dataPLM, type = "values")
+boxplot(RLE_vals, 
+        main = "Relative Log Expression (RLE)", 
+        col = "lightblue", 
+        outline = TRUE, 
+        cex.axis = 0.7,  
+        cex.names = 0.7,  
+        las = 2,
+        names = colnames(RLE_vals))
+```
+Efectivament, veiem com la mostra GSM944858 té un rang interquartil molt més 
+gran que la resta de mostres, i bastants _outliers_, com també ho sembla a la 
+GSM944865 i la GSM944833. En aquest cas, no s'observa res destacable per a la 
+mostra GSM944854.
+
+Per últim, hem fet l'anàlisi de components principals i les hem representat a 
+la **Figura 3**. 
+
+```{r figura_pca, fig.height= 4, fig.width= 15, fig.align = 'center', echo = F, eval = T, fig.cap = "Anàlisi de components principals de les dades rawData."}
+
+# Convertim el PCA a un dataframe per visualitzar-ho millor
+pca_df <- as.data.frame(pca_result$x)
+pca_df$Sample <- rownames(pca_df)
+
+# Afegim la informació del phenoData per separar per grups
+pData_df <- pData(rawData)
+pca_df <- merge(pca_df, pData_df, by.x = "Sample", by.y = "row.names")
+
+# Plot
+g1 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = agent, shape = infection)) +
+  geom_point(size = 4) +
+  labs(title = "PCA agent x infecció", x = "PC1", 
+       y = "PC2") +
+  theme_minimal() +
+  geom_text(aes(label = Sample), hjust = 0, vjust = 0, size = 2)
+
+g2 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = agent, shape = time)) +
+  geom_point(size = 4) +
+  labs(title = "PCA agent x temps", x = "PC1", 
+       y = "PC2") +
+  theme_minimal() +
+  geom_text(aes(label = Sample), hjust = 0, vjust = 0, size = 2)
+
+g3 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = time, shape = infection)) +
+  geom_point(size = 4) +
+  labs(title = "PCA infecció x temps", x = "PC1", 
+       y = "PC2") +
+  theme_minimal() +
+  geom_text(aes(label = Sample), hjust = 0, vjust = 0, size = 2)
+
+grid.arrange(g1, g2, g3, ncol = 3)
+```
+Hem fet 3 plots de les components principals per veure si hi havia agrupaments 
+deguts a l'estat infecciós, el tractament o el temps en que s'han pres les mostres. 
+No veiem agrupacions que cridin l'atenció per aquestes variables, però sembla 
+que hi hagi dos clústers definits. Aquests clústers podrien representar alguna 
+variabilitat no identificada o bé podrien estar associats a alguna altra variable 
+no explorada en aquesta anàlisi.
+
+## Neteja i filtratge de dades. Normalització. 
+
+Com a pas final del pre-processat de dades, hem normalitzat rawData i l'hem 
+filtrat per eliminar _arrays_ repetits i de baixa variància. En la **Figura 4** hem 
+representat l'evolució de la distribució dels valors d'expressió per mostra
+per al set original de dades, el normalitzat i el normalitzat filtrat.
+
+```{r boxplots_preproc, fig.align = 'center', fig.height = 5, fig.width = 12, fig.cap = "Distribució dels valors d'expressió dels metabolits per a el set de dades (A) original, (B) normalitzat i (C) normalitzat i filtrat.", echo = F, eval = T}
+# Dades originals
+dades_originals <- melt(exprs(rawData))
+colnames(dades_originals) <- c("Probe", "Sample", "Expression")
+
+# Dades normalitzades
+norm_matrix_expr <- exprs(normData)
+dades_normalitzades <- melt(norm_matrix_expr)
+colnames(dades_normalitzades) <- c("Probe", "Sample", "Expression")
+
+# Dades filtrades
+filt_matrix_expr <- exprs(fData$eset)
+dades_filtrades <- melt(filt_matrix_expr)
+colnames(dades_filtrades) <- c("Probe", "Sample", "Expression")
+
+# Selecció d'etiquetes per a l'eix X (cada 5 mostres)
+cadax <- seq(1, length(unique(dades_originals$Sample)))
+
+# Gràfica de dades originals
+p1 <- ggplot(dades_originals, aes(x = Sample, y = Expression)) + 
+  geom_boxplot() + 
+  ggtitle("A. rawData") + 
+  labs(x = "Mostres", y = "Expressió") +
+  scale_x_discrete(breaks = unique(dades_originals$Sample)[cadax]) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Gràfica de dades normalitzades
+p2 <- ggplot(dades_normalitzades, aes(x = Sample, y = Expression)) + 
+  geom_boxplot() + 
+  ggtitle("B. normData") + 
+  labs(x = "Mostres", y = "Expressió") +
+  scale_x_discrete(breaks = unique(dades_normalitzades$Sample)[cadax]) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Gràfica de dades filtrades
+p3 <- ggplot(dades_filtrades, aes(x = Sample, y = Expression)) + 
+  geom_boxplot() + 
+  ggtitle("C. fData") + 
+  labs(x = "Mostres", y = "Expressió") +
+  scale_x_discrete(breaks = unique(dades_filtrades$Sample)[cadax]) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+Veiem que la normalització s'ha fet correctament i que el filtratge neteja molt 
+els _outliers_ de les dades i permet diferenciar les mostres correctament. La 
+mostra GSM944858 no presenta.
+
+A la **Figura 5** veiem representat l'escalat multidimensional. Comprovem que 
+les mostres GSM944858 i GSM944863 s'allunyen substancialment de la resta. La 
+GSM944851 i la GSM944865 també estan més aïllades. Totes tenen en comú que han 
+estat preses a les 24h, però la GSM944863 es diferencia de les altres ja que 
+no té tractament aplicat mentre que la resta està tractada amb V. 
+
+```{r mds, echo = F, eval = T, fig.align = 'center', fig.width = 6, fig.height = 4, fig.cap = "Visualització de l'escalat multidimensional per veure agrupacions de mostres."}
+plotMDS(normData, labels = sampleNames(normData))
+```
+No veig sentit fer una correcció de "batch" perquè no trobo dos grups definits. 
+Sí que sembla que les mostres se separen per dos grups, però no tenen res a 
+veure amb el temps ni el tractament ni l'estat d'infecció, ja que estan mesclades. 
+El mateix passava amb el PCA. Així que procedeixo sense fer cap pre-processat 
+més però tenint en compte que hi ha alguna cosa que se m'està escapant. Potser el 
+dia en què es van fer les mostres difereix, o alguna altra covariable que no 
+puc controlar perquè no en tinc informació. De fet, si mirem el percentatge 
+d'informació que contenen les dues primeres components principals:
+```{r pca_summ, echo = F, eval = T}
+summary(pca_result)$importance[, 1:2]
+```
+És a dir, que entre les dues sumen un 56% de la variància, però per tant hi ha 
+molta altra part d'informació que queda inexplicada.
+
+## Obtenció de les llistes de gens diferencialment expressats per a cada comparació
+
+Després de fer les matrius de disseny i de contrastos i definir-les bé, després 
+d'implementar el model linear amb `limma` i tenir en compte les múltiples 
+comparacions (els p-values s'ajusten a aquestes múltiples fonts d'error), no ens 
+surt cap gen diferencialment expressat:
+
+```{r res_limma, echo = F, eval = T}
+cat("Resultat del model linear per als no tractats infectats vs no infectats:")
+head(results_nt)
+cat("Resultat del model linear per als tractats amb Vancomicina 
+    infectats vs no infectats:")
+head(results_V)
+cat("Resultat del model linear per als tractats amb Linezolid 
+    infectats vs no infectats:")
+head(results_L)
+
+cat("Resultats de l'anàlisi de gens diferencials:")
+summary(res.selected)
+```
+
+Per això, com hem mencionat, hem procedit amb els p-valors sense ajustar, i 
+així podem trobar:
+
+```{r shitty_res, echo = F, eval = T}
+cat("Resultats de l'anàlisi de gens diferencials:")
+summary(res.selected2)
+```
+
+I a la **Figura 6** podem veure el diagrama de Venn de l'expressió diferenciada 
+segons comparació:
+
+```{r venn, echo = F, eval = T, fig.align = 'center', fig.width = 6, fig.height = 4, fig.cap = "Diagrama de Venn de l'expressió diferenciada entre els grups comparatius per veure quants gens particularment expressats tenen en comú."}
+vennDiagram(res.selected2, main="Gens en comú entre grups", cex=0.9)
+```
+
+## Anotació dels gens
+A les **Figures 7, 8 i 9**, podem veure els volcano plots del gens diferencialment 
+expressats amb anotacions.
+
+```{r anot_res, echo = F, eval = T, fig.width = 4, fig.height = 4, fig.align = 'center', fig.cap = "Volcano plot dels gens diferencialment expressats per a infectats vs no infectats sense tractament."}
+geneSymbols <- AnnotationDbi::select(mouse4302.db, rownames(fit.main), c("SYMBOL"))
+SYMBOLS<- geneSymbols$SYMBOL
+volcanoplot(fit.main, coef="No_tractats_I_vs_noI", highlight=4, names=SYMBOLS, 
+             main=paste("Gens diferencialment expressats", colnames(cont.matrix)[1], sep="\n"))
+abline(v=c(-1,1))
+```
+
+
+```{r anot_res2, echo = F, eval = T, fig.width = 4, fig.height = 4,fig.align = 'center', fig.cap = "Volcano plot dels gens diferencialment expressats per a infectats vs no infectats i Vancomicina."}
+volcanoplot(fit.main, coef="Vancomicina_I_vs_noI", highlight=4, names=SYMBOLS, 
+             main=paste("Gens diferencialment expressats", colnames(cont.matrix)[1], sep="\n"))
+abline(v=c(-1,1))
+```
+
+```{r anot_res3, echo = F, eval = T, fig.width = 4, fig.height = 4,fig.align = 'center', fig.cap = "Volcano plot dels gens diferencialment expressats per a infectats vs no infectats i Linezolid."}
+volcanoplot(fit.main, coef="Linezolid_I_vs_noI", highlight=4, names=SYMBOLS, 
+             main=paste("Gens diferencialment expressats", colnames(cont.matrix)[1], sep="\n"))
+abline(v=c(-1,1))
+```
+
+A la **Figura 10**, presentem aquests resultats en forma de _heatmap_:
+
+```{r heatmap, echo = F, eval = T, fig.width = 8, fig.height = 6, fig.align = 'center', fig.cap = "Heatmap de l'expressió gènica amb anotacions."}
+probesInHeatmap <- rownames(res.selected2)
+HMdata <- final_matrix_expr[rownames(final_matrix_expr) %in% probesInHeatmap,]
+
+geneSymbols2 <- AnnotationDbi::select(mouse4302.db, rownames(HMdata), c("SYMBOL"))
+SYMBOLS2 <- geneSymbols2$SYMBOL
+rownames(HMdata) <- SYMBOLS2
+
+my_palette <- colorRampPalette(c("blue", "red"))(n = 299)
+
+heatmap.2(HMdata,
+           Rowv = FALSE,
+           Colv = FALSE,
+           main = "Differentially expressed genes",
+           scale = "row",
+           col = my_palette,
+           sepcolor = "white",
+           sepwidth = c(0.05,0.05),
+           cexRow = 0.5,
+           cexCol = 0.7,
+           key = TRUE,
+           keysize = 1.5,
+           density.info = "histogram",,
+           tracecol = NULL,
+           dendrogram = "none",
+           srtCol = 90)
+par(cex.main = 0.8) 
+
+```
+Veiem com a la mostra `GSM944865` estan infrarepresentats els gens "Tbx21" i 
+"Ncr1". També tenim diversos gens sobre-expressats. És una mostra presa a un ratolí 
+infectat i tractat amb vancomicina, presa a les 24h.
+
+Per veure-ho amb més detall i quantitativament, veiem les taules anotades. Si 
+mirem les taules, els 5 gens significativament més expressats per a cada grup, 
+són:
+
+```{r taulestop, echo = F, eval = T}
+cat("5 gens més expressats sense tractament:")
+top_NT <- topAnnotated_NT[topAnnotated_NT$P.Value < 0.05, ]
+head(top_NT[order(-abs(top_NT$AveExpr)), ], 5)
+
+cat("5 gens més expressats amb tractament amb Linezolid:")
+top_L <- topAnnotated_L[topAnnotated_L$P.Value < 0.05, ]
+head(top_L[order(-abs(top_L$AveExpr)), ], 5)
+
+cat("5 gens més expressats amb tractament amb Vancomicina:")
+top_V <- topAnnotated_V[topAnnotated_V$P.Value < 0.05, ]
+head(top_V[order(-abs(top_V$AveExpr)), ], 5)
+```
+És a dir, una major expressió de la fibronectina 1, està associada amb haver 
+efectuat tractament sigui quin sigui, mentre que la fosfatasa 1 d'especificitat 
+dual està associada amb el Linezolid i la _resistin like alpha_ està associada 
+al tractament amb Vancomicina. És curiós perquè aquest últim tractament s'associa 
+amb la metallothionein 2 i el tractament de Linezolid està associat amb la 
+inhibició de teixit de metalloproteinase 2. No rebre cap tractament dóna una 
+expressió elevada de transferrina, d'expressió mitjana prou similar al tractament 
+amb Vancomicina, per tant no és característica. El que sí sembla indicador de 
+tractament, també, és el C-C motif chemokine ligand 9. Al següent apartat 
+podrem discutir què implica això.
+
+## Anàlisi de la significació biològica
+
+Seguidament, introduirem a les **Figura 11, 12 i 13** els resultats de l'anàlisi 
+de significança biològica amb GO i KEGG, per a cada comparació respectivament. 
+
+```{r enrich_plots, echo = F, eval = T, fig.align='center', fig.width = 15, fig.height = 8, fig.cap = "Anàlisi de significança biològica per a ratolins no tractats."}
+# Faig una funció perquè faré el mateix per cada comparació i ja no vull fer més 
+# copia i pega.
+enrichment_plots <- function(enrich_GO, enrich_KEGG, comparison_name) {
+  # A la primera fila: Dotplot per GO i KEGG
+  d1<-dotplot(enrich_GO, showCategory = 10, title = paste("GO Enrichment:", comparison_name))
+  d2<-dotplot(enrich_KEGG, showCategory = 10, title = paste("KEGG Enrichment:", comparison_name))
+  
+  # A la segona fila: Cnetplot per GO i KEGG
+  c1<-cnetplot(enrich_GO, showCategory = 10, title = paste("GO Network:", comparison_name))
+  c2<-cnetplot(enrich_KEGG, showCategory = 10, title = paste("KEGG Network:", comparison_name))
+  grid.arrange(d1,d2,c1,c2,ncol=2)
+}
+
+enrichment_plots(enrich_NT$enrich_GO, enrich_NT$enrich_KEGG, "NT")
+```
+
+```{r enrich_plotsb, echo = F, eval = T, fig.align='center', fig.width = 15, fig.height = 8, fig.cap = "Anàlisi de significança biològica per a ratolins tractats amb Vancomicina"}
+
+enrichment_plots(enrich_V$enrich_GO, enrich_V$enrich_KEGG, "V")
+```
+
+```{r enrich_plotsc, echo = F, eval = T, fig.align='center', fig.width = 15, fig.height = 8, fig.cap = "Anàlisi de significança biològica per a ratolins tractats amb Linezolid."}
+enrichment_plots(enrich_L$enrich_GO, enrich_L$enrich_KEGG, "L")
+```
+
+Es veu una diferència significativa en les vies afectades per Linezolid respecte 
+a Vancomicina, especialment en les vies immunològiques i metabòliques. La 
+regulació de l'activitat d'hidrolasa és comuna pels no tractats i els tractats 
+amb V, mentre que als tractats amb L predomina la regulació de la resposta del 
+sistema immune innat. Tots els termes GO presents als resultats del tractament 
+amb L indiquen una major resposta immune davant la infecció que la falta de 
+tractament o el tractament amb V, que fa una resposta més inflamatòria. Aquests 
+resultats van en la línia de l'article. El que no m'acaba de quedar clar són 
+els resultats amb KEGG, però sí veig que el toll-like receptor signaling 
+pathway només sembla activat per al tractament amb L, mentre que a l'article 
+original diu que no hi ha diferències entre tractaments.
+
+
+\newpage
+
+
+# Discussió i limitacions i conclusions de l'estudi
+
+Hem fet un anàlisi d'expressió diferencial de gens a unes mostres de murí 
+infectat amb _S. aureus_, comparant els ratolins infectats i no infectats segons 
+si no els hi donaven tractament, si els donaven Vancomicina o Linezolid. 
+
+Abans de fer un resum i discussió dels resultats, vull fer una petita introspecció:
+
+Crec que hi ha alguna cosa que no he acabat de fer bé en aquesta PAC. És molt 
+estrany que el PCA i el MDS mostrin dos grups diferenciats, com si fossin dos 
+batches, però que no estiguin definits per cap de les variables que tenim. Llavors, 
+crec que tinc una certa interferència no quantificada als resultats i, a la vida 
+real, no podria procedir amb aquest anàlisi sense una exploració prèvia de les dades 
+crues inicials, contactant a la gent de laboratori per veure si hi ha alguna 
+covariable per la que pugui controlar que, ara mateix i amb les dades que tinc, 
+no he sapigut trobar. Vull deixar clar però que he estudiat la teoria i l'activitat 
+2.1. en què es parla de l'efecte del batch i entenc la seva importància, així com 
+sé que s'ha de resoldre amb la llibreria SVA i amb comBat. Simplement, no he trobat 
+la variable per fer-ho. És que podria ser que les mostres s'haguessin pres en 
+dies diferents i haguessin fet uns ratolins un dia i uns altres un altre, però això 
+no està descrit a l'article [11] i per tant no crec que sigui així. Per tant, 
+parteixo de la base que algo hi ha que no he pogut idenitificar. 
+
+D'altra banda, també em resulta curiós que la mostra GSM944858 em segueixi sortint 
+com a _outlier_ després d'un pre-processat tant exhaustiu, i on hem reduit l'anàlisi 
+al 10% de gens que ens proporcionen major informació de la diferència entre mostres. 
+He pensat que potser havia tingut mala sort i m'havia tocat una mala mostra, però 
+canviant-la per l'altra de la seva categoria (anàlisi que no surt aquí perquè 
+l'he acabat descartant) quan he refet l'anàlisi de qualitat m'han començat a sortir 
+més mostres _outliers_ i ja he desesperat. El cert és que no ho he acabat d'entendre, 
+i també havia pensat treure més _arrays_ per veure si disminuïem la variabilitat 
+però ho he intentat i seguia igual, així que ho he descartat també i per això no surt. 
+
+És que a més, no em surt cap gen diferencialment expressat, cosa que es contradiu 
+amb els resultats de l'article, i que no crec que tingui sentit, però amb la 
+funció eBayes() per fer el test estadístic, i fent la correcció de Benjamini i 
+Hochberg, els p-valors surten no significatius. A més, és que estic segura que 
+s'han d'aplicar les correccions, perquè tenim molts gens que estem comprovant 
+entre grups i això s'ha de tenir en compte per no acumular error. Així que no 
+acabo d'entendre perquè no m'està sortint bé això i no sé com arreglar-ho. 
+Potser he tingut mala sort escollint mostres, no ho sé, potser se m'està escapant 
+alguna cosa... Però he revisat tota la documentació al meu abast i no trobo cap 
+solució. Espero amb moltes ganes la correcció de la PAC per veure què he fet 
+malament. 
+
+És que a més he provat també amb un model diferencial per a cada comparació, 
+és a dir, una matriu de disseny i els contrastos únics per a cada comparació i 
+fer aquests fits individuals, perquè segons el que he vist a l'article original 
+semblava que quadrés millor amb l'anàlisi però tampoc em sortia cap expressió diferenciada. 
+Així que ho he tornat a deixar com a una matriu única que crec que també és vàlid...
+
+Tot això ho explico, però, perquè si em quedés amb això no hauria fet res, així 
+que per poder seguir amb la PAC i fer la resta d'anàlisis, he decidit agafar 
+com a gens diferencialment expressats aquells que tenen p-valor < 0.05, el no 
+ajustat. Tot el que explicaré seguidament serà sota aquesta assumpció i per tant 
+no és molt _accurate_, però crec que és important que es vegi que si m'hagués 
+sortit tot bé hauria estat capaç de procedir amb l'anàlisi i interpretar els 
+resultats. Així que la discussió com si no hagués passat res seria:
+
+Hem llegit dades de _microarrays_ d'un experiment fet per Sharma-Kuinkel, BK _et al_ 
+[11], en què seguien a ratolins infectats amb _S. aureus_ durant 24h i miraven 
+l'expressió gènica d'aquests ratolins segons el tractament aplicat sobre ells: 
+vancomicina, linezolid o la falta de tractament. 
+
+Hem guardat les dades en un objecte `AffyBatch` què hem explorat i hem pogut 
+observar que contenia diverses mostres preses sota les mencionades condicions 
+on trobàvem algunes mostres amb bastanta variabilitat. Hem normalitzat les 
+dades amb l'algoritme de RMA i les hem filtrat per tal d'eliminar _arrays_ 
+duplicats i quedar-nos amb el 10% de sondes amb major variància, que són les 
+que contenen més informació. 
+
+A l'anàlisi de PCA i de MDS no s'han vist grups diferenciats per les variables 
+de temps, infecció ni tractament. Hem creat les matrius de disseny i contrastos 
+de l'anàlisi, tenint en compte que el nostre objectiu és comparar l'expressió 
+gènica entre ratolins infectats i no infectats, segons el grup de tractament. 
+Aquests anàlisis són independents i diferenciats, però després també en volem 
+comparar els resultats. Hem fet per a això un model lineal utilitzant les 
+matrius prèviament definides, gràcies al paquet `limma`, en què hem pogut 
+comprovar quins són els gens majorment expressats per a cada comparació. Sabem 
+quin és cada gen ja que també hem pogut anotar-los gràcies a les llibreries 
+que existeixen actualment. 
+
+- No tractats: transferrina, albumina, hemopexina
+- Tractats amb Linezolid: fibronectina, dual specificity phosphatase 1, 
+C-C motif chemokine ligand 9.
+- Tractats amb Vancomicina: fibronectina, resistin like alpha, 
+C-C motif chemokine ligand 9.
+
+Mentre que les proteïnes que estan associades a cada gen diferencialment expressat 
+pels no tractats són centrades en processos de transport, les dels ratolins 
+tractats són de respostes immunes i inflamatòries, essent el tractament amb 
+linezolid menys inflamatori que el de la vancomicina. La presència de Cxcl9 és 
+comuna en el nostre estudi i l'original, però no trobem l'efecte de Il1r2, que 
+ajuda a moderar la resposta inflamatòria; Cd14 que juga un paper important en 
+la detecció de patògens, com bacteris; i sobretot el que destaca a l'article 
+original, Nfkbia, que controla la producció de citocines i altres gens implicats 
+en la inflamació i la resposta immune. (cosa que concorda amb què alguna cosa he 
+fet malament)
+
+I finalment, hem fet l'anàlisi de significància biològica d'aquests gens, per a 
+entendre el sentit biològic d'aquestes diferències gèniques. Veiem que el 
+Linezolid està associat amb una resposta immunològica molt forta, seguint un 
+toll-like receptor signaling pathway, amb quemotaxis cel·lular i migració de 
+leucòcits. Pel que fa al tractament amb Vancomicina, no em surt que hi hagi 
+una resposta a la infecció, i els processos que produeix són més aviat 
+antiinflamatoris i coagulants que no pas de resposta immunològica. 
+
+Tal i com a l'estudi original, aquest estudi demostra que, en comparació amb V, 
+el tractament amb L s'associa amb nivells reduïts de producció de toxines, 
+diferències en la resposta inflamatòria de l'hoste i característiques diferents 
+d'expressió gènica de l'hoste en la sèpsia de MRSA. Tanmateix, crec que de 
+maneres prou diferents, ja que les diferenciacions gèniques no són les mateixes 
+en ambdós anàlisis.
+
+Es pot trobar tota la informació complementària al github:
+
+https://github.com/aid-pm/AnalisiOmiques/tree/main/PEC1
+
+*M'ha agradat molt fer aquesta PEC i he après moltíssim, però m'han faltat 
+recursos per a resoldre els problemes que he tingut continuament. I de debò que 
+m'he mirat cada fòrum, github, vídeo, pdf i ppt que hi ha penjat a l'aula. 
+
+# Referències
+
+1. Ahn S, Sharma-Kuinkel BK, Zhang Y, Fowler VG. Expression data in Staphylococcus aureus-infected mice with linezolid and vancomycin treatment [Internet]. Gene Expression Omnibus (GEO); 2012. Available from: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE38531
+
+2. Sanchez-Pla A. Ejemplo de Análisis de Microarrays con Bioconductor [Internet]. GitHub repository. 2019 [cited 2024 Dec 21]. Available from: https://github.com/ASPteaching/Ejemplo_de_Analisis_de_Microarrays_con_Bioconductor/blob/master/EjemploAnalisisMicroarrays.R
+
+3. Bolstad BM, Collin F, Brettschneider J, Simpson K, Cope L, Irizarry RA, Speed TP. Quality Assessment of Affymetrix GeneChip Data. In: Gentleman R, Carey V, Huber W, Irizarry R, Dudoit S, editors. Bioinformatics and Computational Biology Solutions using R and Bioconductor. New York: Springer; 2005. p. 33–47.
+
+4. Gautier L, Cope L, Bolstad BM, Irizarry RA. affy: Analysis of Affymetrix GeneChip data at the probe level [Internet]. Bioconductor; [cited 2024 Dec 21]. Available from: https://bioconductor.org/packages/release/bioc/vignettes/affy/inst/doc/affy.pdf
+
+5. Carvalho BS, Irizarry RA. oligo: Analysing Illumina and Affymetrix Data [Internet]. Bioconductor; [cited 2024 Dec 21]. Available from: https://www.bioconductor.org/packages/release/bioc/vignettes/oligo/inst/doc/oug.pdf
+
+6. Sanchez-Pla A. Case Study 1: Microarrays Analysis [Internet]. 2019 [cited 2024 Dec 21]. Available from: https://aspteaching.github.io/Omics_Data_Analysis-Case_Study_1-Microarrays/Case_Study_1-Microarrays_Analysis.html#methods
+
+7. ArrayQualityMetrics [Internet]. Available from: https://www.bioconductor.org/packages/release/bioc/html/arrayQualityMetrics.html
+
+8. Sanchez-Pla A. Omics Data Analysis - Case Study 1: Microarrays [Internet]. Available from: https://aspteaching.github.io/Omics_Data_Analysis-Case_Study_1-Microarrays/Case_Study_1-Microarrays_Analysis.html
+
+9. limma: Users Guide [Internet]. Bioconductor; [cited 2024 Dec 21]. Available from: https://www.bioconductor.org/packages/devel/bioc/vignettes/limma/inst/doc/usersguide.pdf
+
+10. Benjamini Y, Hochberg Y. Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing. J R Stat Soc Series B (Methodological). 1995;57(1):289–300. Available from: http://www.jstor.org/stable/2346101
+
+11. Sharma-Kuinkel BK, Zhang Y, Yan Q, Ahn SH, Fowler VG Jr (2013) Host Gene Expression Profiling and In Vivo Cytokine Studies to Characterize the Role of Linezolid and Vancomycin in Methicillin-Resistant Staphylococcus aureus (MRSA) Murine Sepsis Model. PLoS ONE 8(4): e60463. https://doi.org/10.1371/journal.pone.0060463
